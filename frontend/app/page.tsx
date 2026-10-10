@@ -31,6 +31,14 @@ import {
   Activity,
   Layers,
   Check,
+  Clock,
+  User,
+  Users,
+  PhoneIncoming,
+  PhoneOff,
+  PieChart,
+  Calendar,
+  Filter,
 } from 'lucide-react';
 import { getTranslation, LANGUAGE_OPTIONS, SupportedLanguage } from './i18n/translations';
 
@@ -92,6 +100,22 @@ export default function HelloFarmerApp() {
   const [smsList, setSmsList] = useState<any[]>([]);
   const [analytics, setAnalytics] = useState<any>(null);
 
+  // Live Telephony & Voice Agent States
+  const [voiceAgentStatus, setVoiceAgentStatus] = useState<any>(null);
+  const [callsList, setCallsList] = useState<any[]>([]);
+  const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
+  const [selectedCallDetail, setSelectedCallDetail] = useState<any | null>(null);
+  const [callDetailLoading, setCallDetailLoading] = useState<boolean>(false);
+
+  // Platform Analytics Overview States
+  const [analyticsFilterDays, setAnalyticsFilterDays] = useState<number>(30);
+  const [analyticsOverview, setAnalyticsOverview] = useState<any>(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState<boolean>(false);
+
+  // Weather Locations
+  const [weatherLocations, setWeatherLocations] = useState<any[]>([]);
+  const [selectedLocationName, setSelectedLocationName] = useState<string>('Adama, East Shewa');
+
   // Yield Calculator State
   const [yieldInput, setYieldInput] = useState({
     crop: 'teff',
@@ -114,7 +138,33 @@ export default function HelloFarmerApp() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, chatLoading]);
 
-  // Initial Data Fetch
+  // Fetch Voice Agent Status
+  const fetchVoiceAgentStatus = () => {
+    fetch('/api/backend/voice-agent/status')
+      .then((res) => res.json())
+      .then((data) => setVoiceAgentStatus(data))
+      .catch(() => {});
+  };
+
+  // Fetch Calls List
+  const fetchCallsList = () => {
+    fetch('/api/backend/calls?limit=25')
+      .then((res) => res.json())
+      .then((data) => setCallsList(data.calls || []))
+      .catch(() => {});
+  };
+
+  // Fetch Analytics Overview
+  const fetchAnalyticsOverview = (days: number) => {
+    setAnalyticsLoading(true);
+    fetch(`/api/backend/analytics/overview?days=${days}`)
+      .then((res) => res.json())
+      .then((data) => setAnalyticsOverview(data))
+      .catch(() => {})
+      .finally(() => setAnalyticsLoading(false));
+  };
+
+  // Initial Data Fetch & Polling
   useEffect(() => {
     // Fetch active warnings
     fetch('/api/backend/warnings/active')
@@ -122,13 +172,21 @@ export default function HelloFarmerApp() {
       .then((data) => setWarningsList(Array.isArray(data) ? data : []))
       .catch(() => {});
 
-    // Fetch weather forecast
+    // Fetch initial weather forecast
     setWeatherLoading(true);
     fetch('/api/backend/weather/forecast?lat=8.54&lon=39.27&location=Adama,%20East%20Shewa')
       .then((res) => res.json())
       .then((data) => setWeatherData(data))
       .catch(() => {})
       .finally(() => setWeatherLoading(false));
+
+    // Fetch weather locations
+    fetch('/api/backend/weather/locations')
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setWeatherLocations(data);
+      })
+      .catch(() => {});
 
     // Fetch farmer profile
     fetch('/api/backend/farmer/profile')
@@ -147,7 +205,46 @@ export default function HelloFarmerApp() {
       .then((res) => res.json())
       .then((data) => setAnalytics(data))
       .catch(() => {});
+
+    // Voice status & call list
+    fetchVoiceAgentStatus();
+    fetchCallsList();
+
+    // Polling voice agent status every 10s
+    const timer = setInterval(() => {
+      fetchVoiceAgentStatus();
+    }, 10000);
+    return () => clearInterval(timer);
   }, []);
+
+  // Re-fetch analytics when date filter changes
+  useEffect(() => {
+    fetchAnalyticsOverview(analyticsFilterDays);
+  }, [analyticsFilterDays]);
+
+  // Handle location change
+  const handleLocationChange = (locName: string) => {
+    setSelectedLocationName(locName);
+    const loc = weatherLocations.find((l) => l.name === locName);
+    if (!loc) return;
+    setWeatherLoading(true);
+    fetch(`/api/backend/weather/forecast?lat=${loc.lat}&lon=${loc.lon}&location=${encodeURIComponent(loc.name)}`)
+      .then((res) => res.json())
+      .then((data) => setWeatherData(data))
+      .catch(() => {})
+      .finally(() => setWeatherLoading(false));
+  };
+
+  // Handle viewing call detail transcript
+  const handleViewCallDetail = (callId: string) => {
+    setSelectedCallId(callId);
+    setCallDetailLoading(true);
+    fetch(`/api/backend/calls/${callId}`)
+      .then((res) => res.json())
+      .then((data) => setSelectedCallDetail(data))
+      .catch(() => {})
+      .finally(() => setCallDetailLoading(false));
+  };
 
   // Handle Asking Question
   const handleAsk = async (textToAsk?: string) => {
@@ -875,15 +972,17 @@ export default function HelloFarmerApp() {
                 <div className="card-interactive animate-entrance stagger-1" style={{ padding: '1.25rem' }}>
                   <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('stat.calls_served')}</span>
                   <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--brand-forest-700)', margin: '0.35rem 0' }}>
-                    18,420+
+                    {analytics?.total_calls ?? (analyticsOverview?.total_calls ?? 0)}
                   </div>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--success)' }}>● {t('stat.sub_calls')}</span>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--success)' }}>
+                    ● {voiceAgentStatus?.service_status === 'ONLINE' ? '8028 AudioSocket Active' : t('stat.sub_calls')}
+                  </span>
                 </div>
 
                 <div className="card-interactive animate-entrance stagger-2" style={{ padding: '1.25rem' }}>
                   <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('stat.active_farmers')}</span>
                   <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--gold-700)', margin: '0.35rem 0' }}>
-                    12,850+
+                    {analytics?.registered_farmers ?? 0}
                   </div>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('stat.sub_farmers')}</span>
                 </div>
@@ -891,7 +990,7 @@ export default function HelloFarmerApp() {
                 <div className="card-interactive animate-entrance stagger-3" style={{ padding: '1.25rem' }}>
                   <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('stat.accuracy')}</span>
                   <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--brand-forest-800)', margin: '0.35rem 0' }}>
-                    94.8%
+                    {analytics?.grounded_rate_pct ? `${analytics.grounded_rate_pct}%` : 'N/A'}
                   </div>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('stat.sub_accuracy')}</span>
                 </div>
@@ -899,7 +998,7 @@ export default function HelloFarmerApp() {
                 <div className="card-interactive animate-entrance stagger-4" style={{ padding: '1.25rem' }}>
                   <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('stat.response_time')}</span>
                   <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--info)', margin: '0.35rem 0' }}>
-                    1.8s
+                    {analytics?.p50_latency_seconds ? `${analytics.p50_latency_seconds}s` : '1.8s'}
                   </div>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('stat.sub_response')}</span>
                 </div>
@@ -1437,11 +1536,13 @@ export default function HelloFarmerApp() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.85rem', color: '#e2e8f0' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.35rem' }}>
                       <span style={{ color: '#94a3b8' }}>SIP Server:</span>
-                      <span style={{ fontWeight: 600 }}>127.0.0.1:5060</span>
+                      <span style={{ fontWeight: 600, fontFamily: 'monospace' }}>
+                        {voiceAgentStatus?.sip_server || '192.168.220.14:5060'}
+                      </span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.35rem' }}>
                       <span style={{ color: '#94a3b8' }}>Extension / User:</span>
-                      <span style={{ fontWeight: 600 }}>1001</span>
+                      <span style={{ fontWeight: 600 }}>1001 / 1002</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.35rem' }}>
                       <span style={{ color: '#94a3b8' }}>Password:</span>
@@ -1453,6 +1554,113 @@ export default function HelloFarmerApp() {
                     </div>
                   </div>
                 </div>
+              </div>
+
+              {/* Live Voice Agent & Telephony Engine Health */}
+              <div className="card-interactive" style={{ padding: '1.75rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <div style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: voiceAgentStatus?.service_status === 'ONLINE' ? '#16a34a' : '#eab308' }} className="animate-pulse" />
+                    <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                      {t('voice.engine_status')}
+                    </h3>
+                  </div>
+                  <span className="badge badge-success" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <CheckCircle2 size={13} />
+                    <span>{voiceAgentStatus?.telephony_engine || 'Asterisk 20 (AudioSocket :9092)'}</span>
+                  </span>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+                  <div style={{ padding: '1rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('voice.active_calls')}</span>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--brand-forest-700)', marginTop: '0.25rem' }}>
+                      {voiceAgentStatus?.active_calls_count ?? 0}
+                    </div>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Real-time concurrent callers</span>
+                  </div>
+
+                  <div style={{ padding: '1rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('voice.total_recorded')}</span>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--gold-700)', marginTop: '0.25rem' }}>
+                      {voiceAgentStatus?.total_calls_recorded ?? callsList.length}
+                    </div>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Persisted in PostgreSQL</span>
+                  </div>
+
+                  <div style={{ padding: '1rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Speech & LLM Pipeline</span>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--brand-forest-800)', marginTop: '0.4rem' }}>
+                      Whisper • Gemini • Edge-TTS
+                    </div>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Amharic & Afaan Oromoo RAG</span>
+                  </div>
+
+                  <div style={{ padding: '1rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Hotline PBX Extension</span>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--brand-forest-700)', marginTop: '0.25rem' }}>
+                      8028
+                    </div>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>PJSIP context: hello-farmer-inbound</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Recent Real Call Activity Preview */}
+              <div className="card-interactive" style={{ padding: '1.75rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                  <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                    Recent 8028 Phone Calls
+                  </h3>
+                  <button onClick={() => setActiveTab('history')} className="btn-secondary" style={{ padding: '0.4rem 0.85rem', fontSize: '0.8rem' }}>
+                    <span>All Call Records</span>
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+
+                {callsList.length === 0 ? (
+                  <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                    {t('history.no_calls')}
+                  </p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {callsList.slice(0, 3).map((c: any) => (
+                      <div key={c.id} style={{ padding: '0.875rem 1rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span style={{ fontWeight: 700, fontSize: '0.85rem' }}>{c.started_at}</span>
+                            <span className="badge badge-neutral" style={{ fontSize: '0.7rem' }}>
+                              {c.language === 'om' ? 'Afaan Oromoo' : 'አማርኛ'}
+                            </span>
+                            <span className={`badge ${c.end_reason === 'completed' ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '0.7rem' }}>
+                              {c.end_reason === 'completed' ? 'Completed' : c.end_reason}
+                            </span>
+                          </div>
+                          {c.first_question && (
+                            <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-body)', maxWidth: '650px' }}>
+                              "{c.first_question}"
+                            </p>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                            {c.duration_seconds}s
+                          </span>
+                          <button
+                            onClick={() => {
+                              handleViewCallDetail(c.id);
+                              setActiveTab('history');
+                            }}
+                            className="btn-primary"
+                            style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
+                          >
+                            {t('history.view_transcript')}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* How it Works 3 Steps */}
@@ -1489,6 +1697,9 @@ export default function HelloFarmerApp() {
 
               {/* Browser Microphone Interactive Playground */}
               <div className="card-interactive" style={{ padding: '2rem', textAlign: 'center' }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.85rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-full)', fontSize: '0.75rem', fontWeight: 600, marginBottom: '0.75rem' }}>
+                  <span>Browser Web Speech Playground</span>
+                </div>
                 <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.25rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
                   {t('voice.web_mic_title')}
                 </h3>
@@ -1552,11 +1763,33 @@ export default function HelloFarmerApp() {
               <div className="card-interactive" style={{ padding: '2rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
                   <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
                       <MapPin size={18} color="var(--brand-forest-700)" />
                       <span style={{ fontWeight: 700, color: 'var(--brand-forest-700)', fontSize: '0.9rem' }}>
-                        {weatherData?.location || t('weather.current_loc')}
+                        {weatherData?.location || selectedLocationName}
                       </span>
+                      {weatherLocations.length > 0 && (
+                        <select
+                          value={selectedLocationName}
+                          onChange={(e) => handleLocationChange(e.target.value)}
+                          style={{
+                            padding: '0.25rem 0.6rem',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border-subtle)',
+                            fontSize: '0.8rem',
+                            backgroundColor: '#ffffff',
+                            color: 'var(--text-main)',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {weatherLocations.map((loc: any) => (
+                            <option key={loc.name} value={loc.name}>
+                              📍 {loc.name} ({loc.region})
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </div>
                     <h2 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
                       {t('weather.title')}
@@ -1567,7 +1800,11 @@ export default function HelloFarmerApp() {
                   </div>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '2.5rem', fontWeight: 800, color: 'var(--text-main)', lineHeight: 1 }}>
-                      {weatherData?.forecast?.temperature_current_c ? `${weatherData.forecast.temperature_current_c}°C` : '23.5°C'}
+                      {weatherLoading ? (
+                        <span style={{ fontSize: '1.5rem', color: 'var(--text-muted)' }}>Updating...</span>
+                      ) : (
+                        weatherData?.forecast?.temperature_current_c ? `${weatherData.forecast.temperature_current_c}°C` : '23.5°C'
+                      )}
                     </div>
                     <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
                       Max {weatherData?.forecast?.temperature_max_c ?? '27.2'}°C • Min {weatherData?.forecast?.temperature_min_c ?? '14.1'}°C
@@ -1833,7 +2070,7 @@ export default function HelloFarmerApp() {
                   <div style={{ padding: '0.875rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('history.caller_id')}</span>
                     <div style={{ fontWeight: 700, fontSize: '0.9rem', fontFamily: 'monospace' }}>
-                      {farmerProfile?.phone_hash || 'e3b0c442...a98b'}
+                      {farmerProfile?.phone_hash || '03e80af0...8275'}
                     </div>
                   </div>
                   <div style={{ padding: '0.875rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
@@ -1849,7 +2086,7 @@ export default function HelloFarmerApp() {
                     </div>
                   </div>
                   <div style={{ padding: '0.875rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>SMS Status</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>SMS Notification Status</span>
                     <div style={{ fontWeight: 700, fontSize: '0.9rem', color: farmerProfile?.opted_in !== false ? 'var(--success)' : 'var(--danger)' }}>
                       {farmerProfile?.opted_in !== false ? t('history.opted_in') : t('history.opted_out')}
                     </div>
@@ -1857,13 +2094,176 @@ export default function HelloFarmerApp() {
                 </div>
               </div>
 
-              {/* Simulated SMS Dispatch Table */}
+              {/* Selected Call Transcript Viewer Modal / Drawer */}
+              {selectedCallId && (
+                <div className="card-interactive" style={{ padding: '1.75rem', border: '2px solid var(--brand-forest-700)', backgroundColor: '#ffffff' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.75rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <PhoneCall size={20} color="var(--brand-forest-700)" />
+                      <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                        {t('history.dialogue_turns')}
+                      </h3>
+                      <span className="badge badge-success">
+                        {selectedCallDetail?.language === 'om' ? 'Afaan Oromoo' : 'አማርኛ'}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setSelectedCallId(null);
+                        setSelectedCallDetail(null);
+                      }}
+                      className="btn-secondary"
+                      style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                    >
+                      <X size={16} />
+                      <span>{t('common.close')}</span>
+                    </button>
+                  </div>
+
+                  {callDetailLoading ? (
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>{t('common.loading')}</p>
+                  ) : selectedCallDetail ? (
+                    <div>
+                      {/* Call metadata header */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.75rem', marginBottom: '1.25rem', padding: '0.75rem 1rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', fontSize: '0.8rem' }}>
+                        <div>
+                          <span style={{ color: 'var(--text-muted)' }}>Started:</span>
+                          <div style={{ fontWeight: 700 }}>{selectedCallDetail.started_at || 'N/A'}</div>
+                        </div>
+                        <div>
+                          <span style={{ color: 'var(--text-muted)' }}>Duration:</span>
+                          <div style={{ fontWeight: 700 }}>{selectedCallDetail.duration_seconds} seconds</div>
+                        </div>
+                        <div>
+                          <span style={{ color: 'var(--text-muted)' }}>Outcome:</span>
+                          <div style={{ fontWeight: 700, color: selectedCallDetail.end_reason === 'completed' ? 'var(--success)' : 'var(--warning)' }}>
+                            {selectedCallDetail.end_reason}
+                          </div>
+                        </div>
+                        <div>
+                          <span style={{ color: 'var(--text-muted)' }}>Caller Hash:</span>
+                          <div style={{ fontWeight: 700, fontFamily: 'monospace' }}>{selectedCallDetail.caller_hash}</div>
+                        </div>
+                      </div>
+
+                      {/* Conversation Turns List */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+                        {(selectedCallDetail.messages || []).map((msg: any, idx: number) => {
+                          const isCaller = msg.speaker === 'caller';
+                          return (
+                            <div
+                              key={msg.id || idx}
+                              style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: isCaller ? 'flex-end' : 'flex-start',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  maxWidth: '75%',
+                                  padding: '0.875rem 1.15rem',
+                                  borderRadius: isCaller ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                                  backgroundColor: isCaller ? 'var(--brand-forest-700)' : 'var(--bg-subtle)',
+                                  color: isCaller ? '#ffffff' : 'var(--text-main)',
+                                  boxShadow: 'var(--shadow-sm)',
+                                  fontSize: '0.925rem',
+                                  lineHeight: 1.5,
+                                }}
+                              >
+                                <div style={{ fontSize: '0.7rem', fontWeight: 700, marginBottom: '0.25rem', opacity: 0.8 }}>
+                                  {isCaller ? '👨‍🌾 Farmer (Caller)' : '🤖 Hello Farmer AI (8028 Assistant)'}
+                                </div>
+                                <div>{msg.text}</div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <p style={{ color: 'var(--text-muted)' }}>Failed to load conversation.</p>
+                  )}
+                </div>
+              )}
+
+              {/* 8028 Telephony Call Records Table */}
+              <div className="card-interactive" style={{ padding: '1.75rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <PhoneIncoming size={20} color="var(--brand-forest-700)" />
+                    <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                      {t('history.call_logs')}
+                    </h3>
+                  </div>
+                  <span className="badge badge-success">
+                    {callsList.length} Recorded Calls
+                  </span>
+                </div>
+
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
+                        <th style={{ padding: '0.75rem' }}>{t('history.date')}</th>
+                        <th style={{ padding: '0.75rem' }}>{t('history.caller_id')}</th>
+                        <th style={{ padding: '0.75rem' }}>Language</th>
+                        <th style={{ padding: '0.75rem' }}>{t('history.duration')}</th>
+                        <th style={{ padding: '0.75rem' }}>{t('history.status')}</th>
+                        <th style={{ padding: '0.75rem' }}>Inquiry Preview</th>
+                        <th style={{ padding: '0.75rem' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {callsList.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                            {t('history.no_calls')}
+                          </td>
+                        </tr>
+                      ) : (
+                        callsList.map((c: any) => (
+                          <tr key={c.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                            <td style={{ padding: '0.75rem', whiteSpace: 'nowrap' }}>{c.started_at}</td>
+                            <td style={{ padding: '0.75rem', fontFamily: 'monospace' }}>{c.caller_hash}</td>
+                            <td style={{ padding: '0.75rem' }}>
+                              <span className="badge badge-neutral">
+                                {c.language === 'om' ? 'Afaan Oromoo' : 'አማርኛ'}
+                              </span>
+                            </td>
+                            <td style={{ padding: '0.75rem', whiteSpace: 'nowrap' }}>{c.duration_seconds}s</td>
+                            <td style={{ padding: '0.75rem' }}>
+                              <span className={`badge ${c.end_reason === 'completed' ? 'badge-success' : 'badge-warning'}`}>
+                                {c.end_reason === 'completed' ? 'COMPLETED' : c.end_reason?.toUpperCase()}
+                              </span>
+                            </td>
+                            <td style={{ padding: '0.75rem', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {c.first_question || 'Dial-in session'}
+                            </td>
+                            <td style={{ padding: '0.75rem' }}>
+                              <button
+                                onClick={() => handleViewCallDetail(c.id)}
+                                className="btn-primary"
+                                style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
+                              >
+                                {t('history.view_transcript')}
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* GSM SMS Dispatch Gateway Table */}
               <div className="card-interactive" style={{ padding: '1.75rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                   <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
                     {t('history.sms_dispatched')}
                   </h3>
-                  <span className="badge badge-neutral">GSM SMS Gateway</span>
+                  <span className="badge badge-neutral">GSM SMS Gateway (Simulated / Local)</span>
                 </div>
 
                 <div style={{ overflowX: 'auto' }}>
@@ -1917,54 +2317,371 @@ export default function HelloFarmerApp() {
           )}
 
           {/* ======================================================== */}
-          {/* TAB 7: PLATFORM ANALYTICS */}
+          {/* TAB 7: PLATFORM PERFORMANCE ANALYTICS */}
           {/* ======================================================== */}
           {activeTab === 'analytics' && (
             <div className="animate-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
               <div className="card-interactive" style={{ padding: '2rem' }}>
-                <h2 style={{ margin: '0 0 0.5rem 0', fontSize: '1.5rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
-                  {t('analytics.title')}
-                </h2>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-                  {t('analytics.subtitle')}
-                </p>
+                {/* Header with Title and Date Range Filter Buttons */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
+                  <div>
+                    <h2 style={{ margin: '0 0 0.5rem 0', fontSize: '1.65rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                      {t('analytics.title')}
+                    </h2>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: 0 }}>
+                      {t('analytics.subtitle')}
+                    </p>
+                  </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1.25rem' }}>
+                  {/* Date Range Selector */}
+                  <div style={{ display: 'flex', gap: '0.5rem', backgroundColor: 'var(--bg-subtle)', padding: '0.35rem', borderRadius: 'var(--radius-md)' }}>
+                    <button
+                      onClick={() => setAnalyticsFilterDays(7)}
+                      style={{
+                        padding: '0.45rem 0.85rem',
+                        borderRadius: 'var(--radius-sm)',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        backgroundColor: analyticsFilterDays === 7 ? 'var(--brand-forest-700)' : 'transparent',
+                        color: analyticsFilterDays === 7 ? '#ffffff' : 'var(--text-body)',
+                        transition: 'all 0.2s ease',
+                      }}
+                    >
+                      {t('analytics.range_7d')}
+                    </button>
+                    <button
+                      onClick={() => setAnalyticsFilterDays(30)}
+                      style={{
+                        padding: '0.45rem 0.85rem',
+                        borderRadius: 'var(--radius-sm)',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        backgroundColor: analyticsFilterDays === 30 ? 'var(--brand-forest-700)' : 'transparent',
+                        color: analyticsFilterDays === 30 ? '#ffffff' : 'var(--text-body)',
+                        transition: 'all 0.2s ease',
+                      }}
+                    >
+                      {t('analytics.range_30d')}
+                    </button>
+                    <button
+                      onClick={() => setAnalyticsFilterDays(0)}
+                      style={{
+                        padding: '0.45rem 0.85rem',
+                        borderRadius: 'var(--radius-sm)',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        backgroundColor: analyticsFilterDays === 0 ? 'var(--brand-forest-700)' : 'transparent',
+                        color: analyticsFilterDays === 0 ? '#ffffff' : 'var(--text-body)',
+                        transition: 'all 0.2s ease',
+                      }}
+                    >
+                      {t('analytics.range_all')}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Primary Aggregated KPI Cards */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
                   <div className="card-interactive" style={{ padding: '1.25rem' }}>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('stat.calls_served')}</span>
                     <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--brand-forest-700)', margin: '0.35rem 0' }}>
-                      {analytics?.total_calls ?? 42}
+                      {analyticsOverview?.total_calls ?? 0}
                     </div>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--success)' }}>● 8028 AudioSocket Live</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--success)' }}>
+                      ● {analyticsOverview?.completed_calls ?? 0} {t('analytics.completed_calls')}
+                    </span>
                   </div>
 
                   <div className="card-interactive" style={{ padding: '1.25rem' }}>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('stat.accuracy')}</span>
-                    <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--gold-700)', margin: '0.35rem 0' }}>
-                      {analytics?.grounded_rate_pct ? `${analytics.grounded_rate_pct}%` : '94.8%'}
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('analytics.completion_rate')}</span>
+                    <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--brand-forest-800)', margin: '0.35rem 0' }}>
+                      {analyticsOverview?.completion_rate_pct !== undefined ? `${analyticsOverview.completion_rate_pct}%` : '0%'}
                     </div>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('advisor.grounded_badge')}</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      Grounded Answer Rate: {analyticsOverview?.grounded_rate_pct ?? 0}%
+                    </span>
+                  </div>
+
+                  <div className="card-interactive" style={{ padding: '1.25rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('analytics.avg_duration')}</span>
+                    <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--gold-700)', margin: '0.35rem 0' }}>
+                      {analyticsOverview?.avg_duration_seconds ? `${analyticsOverview.avg_duration_seconds}s` : '0s'}
+                    </div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      Total: {analyticsOverview?.total_duration_minutes ?? 0} mins
+                    </span>
                   </div>
 
                   <div className="card-interactive" style={{ padding: '1.25rem' }}>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('stat.active_farmers')}</span>
-                    <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--text-main)', margin: '0.35rem 0' }}>
-                      {analytics?.registered_farmers ?? 10}
+                    <div style={{ fontSize: '2rem', fontWeight: 800, color: '#0284c7', margin: '0.35rem 0' }}>
+                      {analyticsOverview?.registered_farmers ?? 28}
                     </div>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('history.caller_id')}</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      Active Alerts: {analyticsOverview?.active_warnings ?? 14}
+                    </span>
+                  </div>
+                </div>
+
+                {/* 2-Column Analytics Visualizations Grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
+                  {/* Visualization 1: Daily Call Volume Trend SVG */}
+                  <div className="card-interactive" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                        {t('analytics.volume_trend')}
+                      </h3>
+                      <span className="badge badge-neutral">Daily Call Count</span>
+                    </div>
+
+                    {(!analyticsOverview?.daily_trends || analyticsOverview.daily_trends.length === 0) ? (
+                      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '180px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                        No call activity in this period
+                      </div>
+                    ) : (
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        {/* SVG Area & Polyline */}
+                        <div style={{ width: '100%', height: '160px', position: 'relative' }}>
+                          <svg viewBox="0 0 400 140" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
+                            <defs>
+                              <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#1e5642" stopOpacity="0.35" />
+                                <stop offset="100%" stopColor="#1e5642" stopOpacity="0.0" />
+                              </linearGradient>
+                            </defs>
+                            {/* Grid lines */}
+                            <line x1="0" y1="20" x2="400" y2="20" stroke="#f1f5f9" strokeDasharray="4" />
+                            <line x1="0" y1="60" x2="400" y2="60" stroke="#f1f5f9" strokeDasharray="4" />
+                            <line x1="0" y1="100" x2="400" y2="100" stroke="#f1f5f9" strokeDasharray="4" />
+                            <line x1="0" y1="130" x2="400" y2="130" stroke="#cbd5e1" />
+
+                            {(() => {
+                              const trends = analyticsOverview.daily_trends;
+                              const maxCalls = Math.max(1, ...trends.map((t: any) => t.total_calls));
+                              const step = 400 / Math.max(1, trends.length - 1);
+                              const points = trends.map((t: any, i: number) => {
+                                const x = i * step;
+                                const y = 130 - (t.total_calls / maxCalls) * 110;
+                                return { x, y, calls: t.total_calls, date: t.date };
+                              });
+
+                              const polylineStr = points.map((p: any) => `${p.x},${p.y}`).join(' ');
+                              const polygonStr = `0,130 ${polylineStr} 400,130`;
+
+                              return (
+                                <>
+                                  <polygon points={polygonStr} fill="url(#areaGradient)" />
+                                  <polyline points={polylineStr} fill="none" stroke="#1e5642" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                                  {points.map((p: any, idx: number) => (
+                                    <g key={idx}>
+                                      <circle cx={p.x} cy={p.y} r="4" fill="#ffffff" stroke="#1e5642" strokeWidth="2.5" />
+                                      <text x={p.x} y={p.y - 8} textAnchor="middle" fontSize="10" fontWeight="bold" fill="#1e5642">
+                                        {p.calls}
+                                      </text>
+                                    </g>
+                                  ))}
+                                </>
+                              );
+                            })()}
+                          </svg>
+                        </div>
+                        {/* Dates row */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                          {analyticsOverview.daily_trends.map((d: any, idx: number) => (
+                            <span key={idx}>{d.date?.slice(5)}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
-                  <div className="card-interactive" style={{ padding: '1.25rem' }}>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('history.sms_dispatched')}</span>
-                    <div style={{ fontSize: '2rem', fontWeight: 800, color: '#0284c7', margin: '0.35rem 0' }}>
-                      {analytics?.dispatched_sms ?? 3}
+                  {/* Visualization 2: Call Outcomes Breakdown */}
+                  <div className="card-interactive" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                        {t('analytics.outcomes_breakdown')}
+                      </h3>
+                      <span className="badge badge-neutral">Resolved vs Dropped</span>
                     </div>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Summaries & Alerts</span>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', flex: 1, justifyContent: 'center' }}>
+                      {/* Segmented Progress Bar */}
+                      <div>
+                        <div style={{ display: 'flex', height: '14px', borderRadius: 'var(--radius-full)', overflow: 'hidden', backgroundColor: 'var(--bg-subtle)', marginBottom: '0.75rem' }}>
+                          <div style={{ width: `${analyticsOverview?.completion_rate_pct ?? 80}%`, backgroundColor: '#16a34a' }} title="Completed" />
+                          <div style={{ width: `${100 - (analyticsOverview?.completion_rate_pct ?? 80)}%`, backgroundColor: '#eab308' }} title="Unanswered / Other" />
+                        </div>
+                      </div>
+
+                      {/* Outcomes Cards */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', textAlign: 'center' }}>
+                        <div style={{ padding: '0.75rem', backgroundColor: '#f0fdf4', borderRadius: 'var(--radius-md)', border: '1px solid #bbf7d0' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#166534', fontWeight: 600 }}>Completed</span>
+                          <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#166534' }}>
+                            {analyticsOverview?.completed_calls ?? 0}
+                          </div>
+                        </div>
+                        <div style={{ padding: '0.75rem', backgroundColor: '#fefce8', borderRadius: 'var(--radius-md)', border: '1px solid #fef08a' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#854d0e', fontWeight: 600 }}>Silence/Timeout</span>
+                          <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#854d0e' }}>
+                            {analyticsOverview?.unanswered_calls ?? 0}
+                          </div>
+                        </div>
+                        <div style={{ padding: '0.75rem', backgroundColor: '#fef2f2', borderRadius: 'var(--radius-md)', border: '1px solid #fecaca' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#991b1b', fontWeight: 600 }}>Failed/Error</span>
+                          <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#991b1b' }}>
+                            {analyticsOverview?.failed_calls ?? 0}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2-Column Row 2: Language Distribution & Frequently Requested Agricultural Topics */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
+                  {/* Visualization 3: Language Distribution Donut Chart */}
+                  <div className="card-interactive" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                        {t('analytics.lang_dist')}
+                      </h3>
+                      <span className="badge badge-neutral">Caller Dialect</span>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-around', flex: 1, flexWrap: 'wrap', gap: '1.5rem' }}>
+                      {/* SVG Donut */}
+                      <div style={{ width: '130px', height: '130px', position: 'relative' }}>
+                        <svg viewBox="0 0 42 42" style={{ width: '100%', height: '100%', transform: 'rotate(-90deg)' }}>
+                          <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#e2e8f0" strokeWidth="5" />
+                          {/* Amharic segment */}
+                          {(() => {
+                            const amPct = analyticsOverview?.language_distribution?.find((l: any) => l.code === 'am')?.pct || 60;
+                            return (
+                              <>
+                                <circle
+                                  cx="21"
+                                  cy="21"
+                                  r="15.91549430918954"
+                                  fill="transparent"
+                                  stroke="#1e5642"
+                                  strokeWidth="5"
+                                  strokeDasharray={`${amPct} ${100 - amPct}`}
+                                  strokeDashoffset="0"
+                                />
+                                <circle
+                                  cx="21"
+                                  cy="21"
+                                  r="15.91549430918954"
+                                  fill="transparent"
+                                  stroke="#c69214"
+                                  strokeWidth="5"
+                                  strokeDasharray={`${100 - amPct} ${amPct}`}
+                                  strokeDashoffset={`${-amPct}`}
+                                />
+                              </>
+                            );
+                          })()}
+                        </svg>
+                        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                            {analyticsOverview?.total_calls ?? 0}
+                          </span>
+                          <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Calls</span>
+                        </div>
+                      </div>
+
+                      {/* Legend */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        {(analyticsOverview?.language_distribution || [
+                          { code: 'am', name: 'Amharic (አማርኛ)', count: 6, pct: 60 },
+                          { code: 'om', name: 'Afaan Oromoo', count: 4, pct: 40 },
+                        ]).map((l: any) => (
+                          <div key={l.code} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <div style={{ width: '12px', height: '12px', borderRadius: '3px', backgroundColor: l.code === 'am' ? '#1e5642' : '#c69214' }} />
+                            <div>
+                              <div style={{ fontWeight: 700, fontSize: '0.85rem' }}>{l.name}</div>
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                {l.count} calls ({l.pct}%)
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Visualization 4: Top Agricultural Topics */}
+                  <div className="card-interactive" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                        {t('analytics.crop_breakdown')}
+                      </h3>
+                      <span className="badge badge-neutral">EIAR Grounded</span>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1, justifyContent: 'center' }}>
+                      {(analyticsOverview?.topics_distribution || []).map((tItem: any, idx: number) => {
+                        const maxCount = Math.max(1, ...(analyticsOverview?.topics_distribution || []).map((x: any) => x.count));
+                        const pct = Math.round((tItem.count / maxCount) * 100);
+                        return (
+                          <div key={idx}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.25rem' }}>
+                              <span>{tItem.topic}</span>
+                              <span style={{ color: 'var(--text-muted)' }}>{tItem.count} inquiries</span>
+                            </div>
+                            <div style={{ height: '8px', borderRadius: 'var(--radius-full)', backgroundColor: 'var(--bg-subtle)', overflow: 'hidden' }}>
+                              <div style={{ height: '100%', width: `${pct}%`, backgroundColor: idx % 2 === 0 ? 'var(--brand-forest-700)' : 'var(--gold-600)', borderRadius: 'var(--radius-full)' }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Visualization 5: 24-Hour Call Activity Histogram */}
+                <div className="card-interactive" style={{ padding: '1.5rem', marginBottom: '2rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                      {t('analytics.hourly_distribution')}
+                    </h3>
+                    <span className="badge badge-neutral">Local East Africa Time (EAT)</span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: '4px', height: '100px', padding: '0.5rem 0' }}>
+                    {(analyticsOverview?.hourly_activity || Array.from({ length: 24 }, (_, i) => ({ hour: i, count: 0 }))).map((h: any) => {
+                      const maxH = Math.max(1, ...(analyticsOverview?.hourly_activity || []).map((x: any) => x.count));
+                      const hHeight = Math.max(4, Math.round((h.count / maxH) * 80));
+                      return (
+                        <div key={h.hour} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
+                          <div
+                            style={{
+                              width: '100%',
+                              height: `${hHeight}px`,
+                              backgroundColor: h.count > 0 ? 'var(--brand-forest-700)' : '#e2e8f0',
+                              borderRadius: '2px',
+                              transition: 'all 0.2s ease',
+                            }}
+                            title={`Hour ${h.hour}:00 - ${h.count} calls`}
+                          />
+                          <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                            {h.hour % 4 === 0 ? `${h.hour}h` : ''}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
                 {/* Pipeline Latency Benchmark */}
-                <div style={{ marginTop: '2rem', padding: '1.5rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-subtle)' }}>
+                <div style={{ padding: '1.5rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-subtle)' }}>
                   <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.05rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
                     {t('analytics.latency_benchmark')}
                   </h3>
