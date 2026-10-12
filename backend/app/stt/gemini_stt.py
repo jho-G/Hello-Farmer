@@ -28,9 +28,9 @@ logger = logging.getLogger("hello_farmer.stt.gemini")
 
 
 class GeminiSTTProvider(BaseSTTProvider):
-    def __init__(self, api_key: str | None = None, model_name: str = "gemini-2.5-flash-lite"):
+    def __init__(self, api_key: str | None = None, model_name: str | None = None):
         self.api_key = api_key or settings.GEMINI_API_KEY
-        self.model_name = model_name
+        self.model_name = model_name or getattr(settings, "STT_GEMINI_MODEL", "gemini-flash-latest")
         self._is_configured = False
 
         if self.api_key and self.api_key != "your_gemini_api_key_here":
