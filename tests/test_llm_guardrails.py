@@ -118,8 +118,13 @@ def test_guardrail_emergency_referral():
 @pytest.mark.asyncio
 async def test_llm_fallback_chain_offline():
     """Verify fallback chain safely catches missing cloud keys and provides spoken safe fallback."""
+    from unittest.mock import AsyncMock
     chain = LLMFallbackChain()
-    # Force empty context and unconfigured keys
+    chain.gemini.generate_response = AsyncMock(side_effect=RuntimeError("Offline"))
+    chain.groq.generate_response = AsyncMock(side_effect=RuntimeError("Offline"))
+    chain.openrouter.generate_response = AsyncMock(side_effect=RuntimeError("Offline"))
+    chain.ollama.generate_response = AsyncMock(side_effect=RuntimeError("Offline"))
+
     answer = await chain.generate_response(
         transcript="ሰላም",
         retrieved_passages=[],

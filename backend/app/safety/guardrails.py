@@ -12,15 +12,26 @@ import logging
 import re
 from typing import Any
 
-from backend.app.llm.base import LLMAnswer
-from backend.app.text.amharic import (
-    extract_quantities_amharic,
-    number_to_amharic_words,
-)
-from backend.app.text.oromo import (
-    extract_quantities_oromo,
-    number_to_oromo_words,
-)
+try:
+    from app.llm.base import LLMAnswer
+    from app.text.amharic import (
+        extract_quantities_amharic,
+        number_to_amharic_words,
+    )
+    from app.text.oromo import (
+        extract_quantities_oromo,
+        number_to_oromo_words,
+    )
+except ImportError:
+    from backend.app.llm.base import LLMAnswer
+    from backend.app.text.amharic import (
+        extract_quantities_amharic,
+        number_to_amharic_words,
+    )
+    from backend.app.text.oromo import (
+        extract_quantities_oromo,
+        number_to_oromo_words,
+    )
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -49,6 +60,10 @@ class GuardrailResult(BaseModel):
     grounded: bool
     needs_referral: bool
     confidence: float = 0.9
+    evidence_mode: str = "rag_grounded"
+    location_used: str | None = None
+    follow_up_question: str | None = None
+    safety_note: str | None = None
 
     @property
     def answer(self) -> str:
@@ -209,8 +224,43 @@ def validate_and_guard(
             rejection_reasons=reasons,
             applied_fallback=True,
             grounded=False,
-            needs_referral=True
+            needs_referral=True,
         )
+
+    # 2b. Placeholder tier rejection for chemical dose recommendations
+    has_placeholder = any(
+        p.get("source_tier") in ("placeholder", 0, "tier_0") or p.get("is_placeholder")
+        for p in retrieved_passages
+    )
+    if has_placeholder and any(k in text.lower() or k in caller_question.lower() for k in CHEMICAL_DOSE_KEYWORDS):
+        reasons.append("Source tier placeholder does not allow chemical/dosage recommendations.")
+        return GuardrailResult(
+            is_safe=False,
+            final_answer=safe_fallback,
+            final_en_gloss="Safe fallback: chemical recommendation supported only by placeholder context.",
+            rejection_reasons=reasons,
+            applied_fallback=True,
+            grounded=False,
+            needs_referral=True,
+        )
+
+    # 2c. Hallucinated quantities check
+    answer_numbers = extract_all_numbers_from_text(text, language=language)
+    if answer_numbers and retrieved_passages:
+        context_text = " ".join(p.get("text", "") or p.get("content", "") for p in retrieved_passages)
+        context_numbers = extract_all_numbers_from_text(context_text, language=language)
+        hallucinated = answer_numbers - context_numbers
+        if hallucinated:
+            reasons.append(f"Hallucinated numeric quantities not found in context: {hallucinated}")
+            return GuardrailResult(
+                is_safe=False,
+                final_answer=safe_fallback,
+                final_en_gloss="Safe fallback: ungrounded quantities detected.",
+                rejection_reasons=reasons,
+                applied_fallback=True,
+                grounded=False,
+                needs_referral=True,
+            )
 
     # 3. Dosage sanity check
     is_dosage_safe, dosage_reason = validate_dosage_sanity(text, language=language)
@@ -222,7 +272,7 @@ def validate_and_guard(
             else "Nageenyaaf jecha hamma farra ilbiisaa yookiin xaa'oo fayyadamuu keessan dura qajeelfama dubbisaa ogeessa qonnaa mariisisaa."
         )
         return GuardrailResult(
-            is_safe=True,
+            is_safe=False,
             final_answer=dosage_safe_msg,
             final_en_gloss=f"Dosage safety referral: {dosage_reason}",
             rejection_reasons=[dosage_reason],
@@ -244,7 +294,11 @@ def validate_and_guard(
         final_en_gloss=gloss or "Agricultural advisory answer.",
         rejection_reasons=[],
         applied_fallback=False,
-        grounded=True,
-        needs_referral=False,
-        confidence=getattr(answer, "confidence", 0.95) or 0.95
+        grounded=getattr(answer, "grounded", True),
+        needs_referral=getattr(answer, "needs_referral", False),
+        confidence=getattr(answer, "confidence", 0.95) or 0.95,
+        evidence_mode=getattr(answer, "evidence_mode", "rag_grounded"),
+        location_used=getattr(answer, "location_used", None),
+        follow_up_question=getattr(answer, "follow_up_question", None),
+        safety_note=getattr(answer, "safety_note", None),
     )

@@ -47,9 +47,12 @@ languages:
 
 stt:
   default_provider: "gemini"
+  fallback_provider: "groq"
   providers:
     gemini:
-      model_name: "gemini-2.5-flash"
+      model_name: "gemini-3.5-transcribe"
+    groq:
+      model_name: "whisper-large-v3"
     whisper:
       model_name: "Systran/faster-whisper-small"
       device: "auto"
@@ -59,24 +62,29 @@ stt:
       license_warning: "Meta CC-BY-NC: Non-commercial evaluation only"
 
 tts:
-  default_provider: "edge_tts"
+  default_provider: "gemini"
+  fallback_provider: "edge_tts"
   cache_dir: "backend/cache/tts"
   providers:
+    gemini:
+      model: "gemini-3.8-flash-tts"
+      voice: "Kore"
     edge_tts:
-      amharic_voice: "am-ET-AmehaNeural"
+      amharic_voice: "am-ET-MekdesNeural"
     mms_tts:
       amharic_model: "facebook/mms-tts-amh"
       oromo_model: "facebook/mms-tts-gaz"
 
 llm:
   default_provider: "gemini"
-  timeout_seconds: 8.0
-  max_retries: 1
+  fallback_provider: "groq"
+  timeout_seconds: 15.0
+  max_retries: 2
   providers:
     gemini:
-      model: "gemini-2.5-flash"
+      model: "gemini-3.5-flash"
     groq:
-      model: "llama-3.3-70b-versatile"
+      model: "qwen/qwen3.8-27b"
     openrouter:
       model: "meta-llama/llama-3.2-3b-instruct:free"
     ollama:

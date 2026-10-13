@@ -43,6 +43,7 @@ class GeminiEmbeddingProvider(BaseEmbeddingProvider):
 
 
         self._configured = False
+        self._quota_exhausted = False
         if self.api_key and self.api_key != "your_gemini_api_key_here":
             try:
                 import google.generativeai as genai
@@ -59,24 +60,44 @@ class GeminiEmbeddingProvider(BaseEmbeddingProvider):
         if not texts:
             return []
 
-        if not self._configured:
-            # Deterministic semantic hash embeddings for offline testing / fallback
+        if not self._configured or self._quota_exhausted:
             return [self._offline_hash_embedding(t) for t in texts]
 
         try:
             import google.generativeai as genai
             vectors = []
-            for text in texts:
-                result = genai.embed_content(
-                    model=self.model_name,
-                    content=text,
-                    task_type="retrieval_document",
-                    output_dimensionality=self._dim,
-                )
-                vectors.append(result["embedding"])
+            batch_size = 50
+            for i in range(0, len(texts), batch_size):
+                if self._quota_exhausted:
+                    vectors.extend([self._offline_hash_embedding(t) for t in texts[i:i + batch_size]])
+                    continue
+                batch = texts[i:i + batch_size]
+                try:
+                    result = genai.embed_content(
+                        model=self.model_name,
+                        content=batch,
+                        task_type="retrieval_document",
+                        output_dimensionality=self._dim,
+                    )
+                    res_emb = result.get("embedding", [])
+                    if res_emb and isinstance(res_emb[0], list):
+                        vectors.extend(res_emb)
+                    elif res_emb:
+                        vectors.append(res_emb)
+                    else:
+                        vectors.extend([self._offline_hash_embedding(t) for t in batch])
+                except Exception as batch_err:
+                    err_msg = str(batch_err)
+                    if "429" in err_msg or "quota" in err_msg.lower():
+                        logger.warning("Gemini embedding quota exceeded (429). Activating fast fallback projection for all remaining chunks.")
+                        self._quota_exhausted = True
+                    else:
+                        logger.warning(f"Gemini embed error: {batch_err}")
+                    vectors.extend([self._offline_hash_embedding(t) for t in batch])
             return vectors
         except Exception as e:
             logger.error(f"Gemini embedding API error: {e}")
+            self._quota_exhausted = True
             return [self._offline_hash_embedding(t) for t in texts]
 
 
