@@ -26,9 +26,9 @@ logger = logging.getLogger("hello_farmer.stt.groq")
 class GroqSTTProvider(BaseSTTProvider):
     """Whisper speech-to-text powered by Groq cloud with acoustic pre-processing and domain biasing."""
 
-    def __init__(self, api_key: str | None = None, model: str = "whisper-large-v3-turbo"):
+    def __init__(self, api_key: str | None = None, model: str | None = None):
         self.api_key = api_key or settings.GROQ_API_KEY
-        self.model = model
+        self.model = model or getattr(settings, "GROQ_STT_MODEL", "whisper-large-v3")
         self.endpoint = "https://api.groq.com/openai/v1/audio/transcriptions"
 
     def _prepare_wav(self, wav_path_or_bytes: str | bytes) -> bytes:
@@ -61,7 +61,13 @@ class GroqSTTProvider(BaseSTTProvider):
             return True
         return False
 
-    async def transcribe(self, wav_path_or_bytes: str | bytes, language: str = "am") -> Transcript:
+    async def transcribe(
+        self,
+        wav_path_or_bytes: str | bytes,
+        language: str = "am",
+        context: str = "agronomy",
+        prompt_override: str | None = None,
+    ) -> Transcript:
         t0 = time.perf_counter()
         if not self.api_key:
             logger.warning("GROQ_API_KEY not configured for STT.")
@@ -77,15 +83,16 @@ class GroqSTTProvider(BaseSTTProvider):
         files = {
             "file": ("speech.wav", wav_bytes, "audio/wav"),
         }
-        lang_code = "am" if language == "am" else None
+        allowed_languages = ("en", "am", "ti", "so")
+        lang_code = language if language in allowed_languages else "am"
+        biasing_prompt = prompt_override or get_stt_biasing_prompt(lang_code, context=context)
         data = {
             "model": self.model,
             "response_format": "json",
             "temperature": 0.0,
-            "prompt": get_stt_biasing_prompt(language),
+            "prompt": biasing_prompt,
+            "language": lang_code,
         }
-        if lang_code:
-            data["language"] = lang_code
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:

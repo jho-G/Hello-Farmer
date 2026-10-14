@@ -11,6 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.config import settings
 from app.database.session import async_session_factory
 from app.farmer_context.extraction import (
     extract_context_from_utterance,
@@ -58,9 +59,25 @@ def reformulate_search_query(user_text: str, session: "SessionState") -> str:
     return text_clean
 
 WEATHER_INTENT_KEYWORDS = {
-    "am": ["ዝናብ", "የአየር ሁኔታ", "መርጨት", "ንፋስ", "ፀሐይ", "ውርጭ", "በረዶ", "ደመና"],
-    "om": ["roob", "bokkaa", "haala qilleensaa", "biif", "bubbee", "aduu", "cabiitii", "duumessa"],
-    "en": ["weather", "rain", "spray", "spraying", "wind", "temperature", "forecast"],
+    "am": [
+        "ዝናብ", "የአየር ሁኔታ", "መርጨት", "ንፋስ", "ፀሐይ", "ውርጭ", "በረዶ", "ደመና",
+        "የዛሬ አየር", "የዛሬው አየር", "የዛሬ ሙቀት", "የዛሬው ሙቀት", "ሙቀት", "ሙቀቱ",
+        "የአየር ጠባይ", "ቀዝቃዛ", "ሞቃት", "ትኩሳት", "ስንት ዲግሪ", "ዲግሪ", "የሙቀት መጠን"
+    ],
+    "om": [
+        "roob", "bokkaa", "haala qilleensaa", "biif", "bubbee", "aduu", "cabiitii", "duumessa",
+        "ho'a", "hoo'a", "qorra", "tempereechara", "digirii", "qabbana"
+    ],
+    "en": [
+        "weather", "rain", "spray", "spraying", "wind", "temperature", "forecast",
+        "temp", "degrees", "celsius", "hot", "cold", "humidity", "rainy", "sunny", "cloudy"
+    ],
+    "ti": [
+        "ዝናብ", "ኩነታት ኣየር", "ንፋስ", "ፀሓይ", "ቁሪ", "በረድ", "ደመና", "ሙቐት", "ኩነታት አየር", "ዲግሪ"
+    ],
+    "so": [
+        "roob", "cimilada", "dabayl", "qorrax", "kuleyl", "heerkulka"
+    ],
 }
 
 SPRAYING_KEYWORDS = {
@@ -121,7 +138,7 @@ class Response(BaseModel):
 
 
 def is_weather_intent(text: str, language: str = "am") -> bool:
-    """Check if query is asking for weather or spraying conditions."""
+    """Check if query is asking for weather, temperature, or spraying conditions."""
     lower = text.lower()
     kw_list = WEATHER_INTENT_KEYWORDS.get(language, []) + WEATHER_INTENT_KEYWORDS["en"]
     return any(k in lower for k in kw_list)
@@ -135,9 +152,29 @@ def is_spraying_query(text: str, language: str = "am") -> bool:
 
 
 GOODBYE_KEYWORDS = {
-    "am": ["ይበቃል", "ለዛሬ ይበቃል", "ደህና ሁን", "ደህና ሁኚ", "ደህና ሁኑ", "ቻው", "በቃኝ", "በቃ", "ጨርሻለሁ", "አመሰግናለሁ ይበቃል", "እናመሰግናለን ይበቃል"],
-    "om": ["nagaatti", "ga'aadha", "ammaaf ga'aadha", "galatoomi", "xumureera", "nagaan bulaa"],
-    "en": ["goodbye", "bye", "that's all", "that is all", "thank you that's enough", "done"],
+    "am": [
+        "ይበቃል", "ለዛሬ ይበቃል", "ደህና ሁን", "ደህና ሁኚ", "ደህና ሁኑ", "ቻው", "በቃኝ", "በቃ",
+        "ጨርሻለሁ", "አመሰግናለሁ", "እናመሰግናለን", "አመሰግናለሁ ይበቃል", "እናመሰግናለን ይበቃል",
+        "የለም", "የለም በቃኝ", "የለም አመሰግናለሁ", "ምንም የለም", "የለም አመሰግናለው",
+        "በቃ እናመሰግናለን", "ደህና ዋሉ", "ደህና እደሩ", "ምንም ጥያቄ የለኝም", "ጥያቄ የለኝም",
+        "ሌላ ጥያቄ የለኝም", "ምንም ሌላ ጥያቄ የለኝም", "ጥያቄ የለም", "ምንም የለኝም", "የለኝም"
+    ],
+    "om": [
+        "nagaatti", "ga'aadha", "ammaaf ga'aadha", "galatoomi", "xumureera", "nagaan bulaa",
+        "lakki", "lakki galatoomaa", "gaaffii hin qabu", "gaaffii biraa hin qabu", "gaaffiin hin jiru"
+    ],
+    "en": [
+        "goodbye", "bye", "that's all", "that is all", "thank you that's enough", "done",
+        "no thank you", "no thanks", "nothing else", "i don't have a question", "i dont have a question",
+        "no question", "no questions", "i have no question", "i have no questions", "no more questions",
+        "nothing more", "i'm done", "im done", "that's it", "thats all"
+    ],
+    "ti": [
+        "ደሓን ኩኑ", "ደሓን ዋዓሉ", "የቐንየለይ", "ይኣክል", "ሕቶ የብለይን", "ካልእ ሕቶ የብለይን", "የለን"
+    ],
+    "so": [
+        "nabad gelyo", "waa intaas", "mahadsanid", "su'aal kale ma qabo", "wax kale ma jiraan"
+    ],
 }
 
 GREETING_KEYWORDS = {
@@ -150,7 +187,16 @@ GREETING_KEYWORDS = {
 def is_goodbye_intent(text: str, language: str = "am") -> bool:
     lower = text.lower().strip()
     kw_list = GOODBYE_KEYWORDS.get(language, []) + GOODBYE_KEYWORDS["en"]
-    return any(k in lower for k in kw_list)
+    if any(k in lower for k in kw_list):
+        return True
+    no_q_patterns = [
+        "not have any question", "don't have any question", "dont have any question",
+        "have no question", "have no questions", "no question", "no questions",
+        "no more questions", "i am done", "im done", "that is all",
+        "ጥያቄ የለኝም", "ጥያቄ የለም", "ምንም የለኝም", "የለኝም አመሰግናለሁ", "በቃኝ", "ይበቃል",
+        "gaaffii hin qabu", "gaaffii biraa hin qabu", "ሕቶ የብለይን"
+    ]
+    return any(p in lower for p in no_q_patterns)
 
 
 def is_greeting_intent(text: str, language: str = "am") -> bool:
@@ -234,11 +280,19 @@ async def process_utterance(
 
     # 2b. Goodbye / Call Conclusion Flow
     if is_goodbye_intent(user_text, session.language):
-        goodbye_reply = (
-            "ስለደወሉ እናመሰግናለን! መልካም የእርሻ ጊዜ ይሁንልዎ። ደህና ይሁኑ።"
-            if session.language == "am"
-            else "Waan bilbiltaniif guddaa galatoomaa! Yeroo qonnaa gaarii isiniif haa ta'u. Nagaatti!"
-        )
+        if session.language == "am":
+            goodbye_reply = "ስለደወሉ እናመሰግናለን! መልካም የእርሻ ጊዜ ይሁንልዎ። ደህና ይሁኑ።"
+            gloss = "Thank you for calling! Wishing you a great farming season. Goodbye."
+        elif session.language == "om":
+            goodbye_reply = "Waan bilbiltaniif guddaa galatoomaa! Yeroo qonnaa gaarii isiniif haa ta'u. Nagaatti!"
+            gloss = "Thank you for calling! Wishing you a great farming season. Goodbye."
+        elif session.language == "ti":
+            goodbye_reply = "ስለ ዝደወልኩም የቐንየልና! ጽቡቕ ናይ ሕርሻ እዋን ይኹነልኩም። ደሓን ኩኑ።"
+            gloss = "Thank you for calling! Wishing you a great farming season. Goodbye."
+        else:
+            goodbye_reply = "Thank you for calling Hello Farmer! Wishing you a fruitful farming season. Goodbye!"
+            gloss = "Thank you for calling Hello Farmer! Wishing you a fruitful farming season. Goodbye!"
+
         audio_out = b""
         if synthesize_audio:
             tts = get_tts_provider()
@@ -252,7 +306,7 @@ async def process_utterance(
                 needs_referral=False,
                 confidence=1.0,
                 latency_ms={"total": round((time.time() - t0) * 1000, 1)},
-                answer_en_gloss="Thank you for calling! Wishing you a great farming season. Goodbye.",
+                answer_en_gloss=gloss,
                 user_transcript=user_text,
             ),
         )
@@ -317,73 +371,88 @@ async def process_utterance(
         session.extracted_symptoms = ", ".join(extracted.symptoms)
 
 
-    # 3. Weather / Spraying Intent Flow
+    # 3. Weather / Spraying / Temperature Intent Flow
     if is_weather_intent(user_text, session.language):
         weather_t0 = time.time()
         loc_match = resolve_location(user_text)
+        is_default_location = False
+        if not loc_match and session.location_name:
+            loc_match = resolve_location(session.location_name)
         if not loc_match and session.extracted_location:
             loc_match = resolve_location(session.extracted_location)
+        if not loc_match and session.location_woreda:
+            loc_match = resolve_location(session.location_woreda)
+        if not loc_match and session.location_region:
+            loc_match = resolve_location(session.location_region)
 
         if not loc_match:
-            # Need location confirmation
-            ask_loc = (
-                "የአየር ሁኔታውን ለማወቅ እባክዎ ያሉበትን አካባቢ ወይም ወረዳ ይንገሩኝ።"
-                if session.language == "am"
-                else "Haala qilleensaa baruuf maaloo naannoo yookiin aanaa keessan natti himaa."
-            )
-            latencies["weather"] = round((time.time() - weather_t0) * 1000, 1)
-            latencies["total"] = round((time.time() - t0) * 1000, 1)
-            return Response(
-                audio=b"",
-                text=ask_loc,
-                metadata=ResponseMetadata(
-                    grounded=True,
-                    confidence=0.85,
-                    topic="weather_location_request",
-                    latency_ms=latencies,
-                ),
-            )
+            # Fallback to major central farming hub (Adama) so we never fail to answer
+            loc_match = resolve_location("Adama")
+            is_default_location = True
 
         # Update confirmed location in session
-        session.extracted_location = loc_match.name
+        if not is_default_location and loc_match:
+            session.extracted_location = loc_match.name
 
         weather_provider = get_weather_provider()
         forecast = await weather_provider.get_forecast(
-            latitude=loc_match.latitude,
-            longitude=loc_match.longitude,
-            location_name=loc_match.name,
+            latitude=loc_match.latitude if loc_match else 8.54,
+            longitude=loc_match.longitude if loc_match else 39.27,
+            location_name=loc_match.name if loc_match else "Adama",
             days=3,
         )
 
-        conf_phrase = format_spoken_location_confirmation(loc_match, session.language)
+        t_max = round(getattr(forecast, "temperature_max_c", 25.0) or getattr(forecast, "max_temperature_c", 25.0))
+        t_min = round(getattr(forecast, "temperature_min_c", 14.0) or getattr(forecast, "min_temperature_c", 14.0))
+        precip = getattr(forecast, "precipitation_sum_mm", 0.0) or 0.0
+
+        if is_default_location:
+            if session.language == "om":
+                conf_phrase = "Naannoo qonnaa gidduugaleessaa (Adaamaa)tti,"
+            elif session.language == "en":
+                conf_phrase = "In the central farming zone (Adama),"
+            elif session.language == "ti":
+                conf_phrase = "ኣብ ማእከላይ ዞባ ሕርሻ (ኣዳማ)፣"
+            else:
+                conf_phrase = "በማዕከላዊ የእርሻ አካባቢ (አዳማ)፣"
+        else:
+            conf_phrase = format_spoken_location_confirmation(loc_match, session.language)
 
         if is_spraying_query(user_text, session.language):
             # Spraying analysis
             spray_eval = WeatherRiskAnalyzer.evaluate_spraying(forecast)
             if session.language == "om":
-                reply_text = f"{conf_phrase} {spray_eval.reason_om}"
+                raw_reply = f"{conf_phrase} {spray_eval.reason_om}"
+            elif session.language == "en":
+                status_txt = "Conditions are suitable for spraying." if spray_eval.can_spray else "Spraying is not recommended due to weather risks."
+                raw_reply = f"{conf_phrase} {status_txt} {spray_eval.reason_en}"
+            elif session.language == "ti":
+                raw_reply = f"{conf_phrase} {'ናይ ምዝራእ ወይ መድሃኒት ምንጻግ ኩነታት ጽቡቕ እዩ' if spray_eval.can_spray else 'ብሰንኪ ኩነታት ኣየር ምንጻግ ኣይምከርን'}።"
             else:
-                reply_text = f"{conf_phrase} {spray_eval.reason_am}"
-
+                raw_reply = f"{conf_phrase} {spray_eval.reason_am}"
             topic = "weather_spraying"
         else:
-            # General weather forecast summary
+            # Full weather and temperature report
             if session.language == "om":
-                if forecast.is_heavy_rain:
-                    reply_text = f"{conf_phrase} roobni cimaan waan eegamuuf of eeggannoo godhaa."
-                elif forecast.precipitation_sum_mm > 2.0:
-                    reply_text = f"{conf_phrase} roobni ni eegama. Qilleensi qabbanaawaadha."
-                else:
-                    reply_text = f"{conf_phrase} haalli qilleensaa qulqulluu fi rooba kan hin qabneedha."
+                sky_om = "roobni cimaan waan eegamuuf of eeggannoo godhaa" if forecast.is_heavy_rain else ("roobni ni eegama" if precip > 2.0 else "haalli qilleensaa qulqulluu fi bokkaa kan hin qabneedha")
+                raw_reply = f"{conf_phrase} Ho'i har'aa guddaan digirii {t_max} yoo ta'u, xiqqaan digirii {t_min} dha. {sky_om}."
+            elif session.language == "en":
+                sky_en = "heavy rain is expected so take precautions" if forecast.is_heavy_rain else ("light rain is likely" if precip > 2.0 else "mostly fair and dry conditions are expected")
+                raw_reply = f"{conf_phrase} Today's high temperature is {t_max} degrees Celsius and low is {t_min} degrees. {sky_en}."
+            elif session.language == "ti":
+                sky_ti = "ከቢድ ዝናብ ስለ ዝጽበ ጥንቃቐ ግበሩ" if forecast.is_heavy_rain else ("ዝናብ ክህሉ ይኽእል እዩ" if precip > 2.0 else "ዝተረጋገአን ደረቕን ኩነታት ኣየር ይጽበ")
+                raw_reply = f"{conf_phrase} ናይ ሎሚ ዝለዓለ ሙቐት {t_max} ዲግሪ ሴንቲግሬድ ክኸውን እንከሎ፣ ዝተሓተ ድማ {t_min} ዲግሪ ሴንቲግሬድ እዩ። {sky_ti}።"
             else:
-                if forecast.is_heavy_rain:
-                    reply_text = f"{conf_phrase} ከፍተኛ ዝናብ ስለሚጠበቅ አስፈላጊውን ጥንቃቄ ያድርጉ።"
-                elif forecast.precipitation_sum_mm > 2.0:
-                    reply_text = f"{conf_phrase} ዝናብ ስለሚጠበቅ ለእርሻ ስራ አመቺ ሊሆን ይችላል።"
-                else:
-                    reply_text = f"{conf_phrase} የተረጋጋና ዝናብ የሌለበት አየር ሁኔታ ይጠበቃል።"
-
+                sky_am = "ከፍተኛ ዝናብ ስለሚጠበቅ አስፈላጊውን ጥንቃቄ ያድርጉ" if forecast.is_heavy_rain else ("አነስተኛ ዝናብ ሊኖር ይችላል" if precip > 2.0 else "የተረጋጋና ዝናብ የሌለበት አየር ይጠበቃል")
+                raw_reply = f"{conf_phrase} የዛሬው ከፍተኛ ሙቀት {t_max} ዲግሪ ሴንቲግሬድ ሲሆን ዝቅተኛው {t_min} ዲግሪ ሴንቲግሬድ ነው። {sky_am}።"
             topic = "weather_forecast"
+
+        # Transliterate digits to words
+        try:
+            from app.safety.guardrails import replace_digits_with_words
+        except ImportError:
+            from backend.app.safety.guardrails import replace_digits_with_words
+        reply_text = replace_digits_with_words(raw_reply, language=session.language)
 
         latencies["weather"] = round((time.time() - weather_t0) * 1000, 1)
         latencies["total"] = round((time.time() - t0) * 1000, 1)
@@ -442,32 +511,11 @@ async def process_utterance(
             ),
         )
 
-    # 4. Agricultural Agronomy RAG & Live Web Search Flow (LIVE WEB SEARCH PRIORITIZED)
+    # 4. Agricultural Agronomy RAG Flow
     rag_t0 = time.time()
 
     # Reformulate query for contextual multi-turn follow-ups
     search_query = reformulate_search_query(user_text, session)
-
-    # Priority 1: Execute Live Web Search for real-time agricultural advisories
-    web_passages = []
-    try:
-        web_passages = await search_agricultural_web(
-            user_text=search_query,
-            crop=session.extracted_crop,
-            language=session.language,
-            max_passages=4,
-        )
-        if web_passages:
-            # Asynchronously save discovered web passages into PostgreSQL RAG for future reference
-            asyncio.create_task(
-                persist_web_passages_to_rag(
-                    passages=web_passages,
-                    crop=session.extracted_crop,
-                    language=session.language,
-                )
-            )
-    except Exception as e:
-        logger.warning("Live web search error: %s", e)
 
     # Resolve structured location match if available
     loc_match = None
@@ -484,7 +532,7 @@ async def process_utterance(
             session.location_confidence = loc_match.confidence
             session.agroecological_zone = loc_match.agroecological_zone
 
-    # Priority 2: Retrieve local vector DB passages from pgvector with location awareness
+    # Priority 1: Fast local vector DB retrieval from pgvector with location awareness
     retrieved_passages_list = []
     try:
         async with async_session_factory() as db_session:
@@ -498,6 +546,30 @@ async def process_utterance(
             )
     except Exception as e:
         logger.warning("Local DB retrieval error: %s", e)
+
+    # Priority 2: Only fallback to live web search if local database returned few/no results
+    web_passages = []
+    if len(retrieved_passages_list) < 2:
+        try:
+            web_passages = await asyncio.wait_for(
+                search_agricultural_web(
+                    user_text=search_query,
+                    crop=session.extracted_crop,
+                    language=session.language,
+                    max_passages=3,
+                ),
+                timeout=3.5,
+            )
+            if web_passages:
+                asyncio.create_task(
+                    persist_web_passages_to_rag(
+                        passages=web_passages,
+                        crop=session.extracted_crop,
+                        language=session.language,
+                    )
+                )
+        except Exception as e:
+            logger.debug("Live web search fallback: %s", e)
 
     latencies["rag"] = round((time.time() - rag_t0) * 1000, 1)
 
@@ -620,9 +692,9 @@ async def process_utterance(
             follow_up_question=getattr(safe_answer, "follow_up_question", None),
             safety_note=getattr(safe_answer, "safety_note", None),
             stt_provider=stt_provider_name,
-            llm_provider=getattr(raw_answer, "provider", "gemini"),
+            llm_provider=getattr(raw_answer, "provider", getattr(settings, "LLM_PROVIDER", "groq")),
             tts_provider=tts_provider_name,
-            fallback_used=stt_fallback_used or getattr(raw_answer, "provider", "") != "gemini",
+            fallback_used=stt_fallback_used or getattr(raw_answer, "provider", "") != getattr(settings, "LLM_PROVIDER", "groq"),
             latency_ms=latencies,
             answer_en_gloss=safe_answer.english_gloss,
             user_transcript=user_text,

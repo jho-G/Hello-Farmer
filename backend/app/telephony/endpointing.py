@@ -26,11 +26,11 @@ class VADEndpointer:
 
     def __init__(
         self,
-        energy_threshold: int = 700,
-        min_speech_ms: int = 200,
-        silence_timeout_ms: int = 800,
-        initial_silence_timeout_sec: float = 10.0,
-        max_utterance_sec: float = 15.0,
+        energy_threshold: int = 110,
+        min_speech_ms: int = 300,
+        silence_timeout_ms: int = 2500,
+        initial_silence_timeout_sec: float = 14.0,
+        max_utterance_sec: float = 20.0,
     ):
         self.energy_threshold = energy_threshold
         self.min_speech_ms = min_speech_ms
@@ -40,8 +40,8 @@ class VADEndpointer:
         self.last_rms = 0
         self.last_is_voiced = False
 
-        # Pre-roll ring buffer (keep last 200ms = 10 frames before speech onset)
-        self.pre_roll = collections.deque(maxlen=10)
+        # Pre-roll ring buffer (keep last 400ms = 20 frames before speech onset)
+        self.pre_roll = collections.deque(maxlen=20)
 
         self.reset()
 
@@ -86,6 +86,7 @@ class VADEndpointer:
                 self.speech_frames.extend(list(self.pre_roll))
                 self.speech_frames.append(frame_bytes)
             else:
+                self.pre_roll.append(frame_bytes)
                 # Check initial silence timeout (strictly wall-clock elapsed time so buffered frames never trigger premature timeout)
                 if now - self.start_time >= self.initial_silence_timeout_sec:
                     self.state = EndpointState.INITIAL_SILENCE_TIMEOUT
@@ -120,9 +121,9 @@ class VADEndpointer:
         return self.state
 
     def get_speech_pcm(self) -> bytes:
-        """Return accumulated 8 kHz 16-bit PCM bytes for the utterance, trimming trailing silence."""
-        # Trim trailing silence frames exceeding 200ms
-        excess_silence_frames = max(0, (self.silence_ms - 200) // self.FRAME_MS)
+        """Return accumulated 8 kHz 16-bit PCM bytes for the utterance, retaining 500ms trailing comfort buffer."""
+        # Trim trailing silence frames exceeding 500ms so final consonant and vowel formants are preserved
+        excess_silence_frames = max(0, (self.silence_ms - 500) // self.FRAME_MS)
         if excess_silence_frames > 0 and len(self.speech_frames) > excess_silence_frames:
             frames_to_return = self.speech_frames[:-excess_silence_frames]
         else:

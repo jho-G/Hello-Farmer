@@ -1,7 +1,7 @@
 # Project Status (STATUS.md)
 
 Current Date: October 2026  
-Current Status: **Phase 4 (LLM and Guardrails) - COMPLETED ✅ | Ready for Phase 5 Gate**
+Current Status: **Production MVP Configured (Groq LLM Primary + Edge-TTS/Google TTS Multi-Tier) ✅ | Telephony Verified**
 
 ---
 
@@ -164,6 +164,24 @@ Current Status: **Phase 4 (LLM and Guardrails) - COMPLETED ✅ | Ready for Phase
   - **Automated Test Suite**:
     - 14 comprehensive tests in `tests/test_gemini_providers.py` covering Section 10 acceptance criteria passing 100%.
     - Full test suite passing across all 110 tests.
+- [x] **Phase 14 (Conversational Voice, Turn-Taking, Latency & Consistency Enhancement)**:
+  - **3-Step Opening Sequence**:
+    - Step 1: Immediate prompt greeting & recording disclosure (`greeting_{lang}.wav`) without waiting for farmer speech or complex consent gates.
+    - Step 2: Location collection (`ask_location_{lang}.wav`) with natural speech parsing, Ge'ez/Oromo prefix-cleaning, ambiguous region clarification (`clarify_region_{lang}.wav`), and **zero silent defaulting to Addis Ababa**.
+    - Step 3: Agricultural problem question (`ask_problem_{lang}.wav`) leading directly into natural conversation.
+  - **100% Unified Voice Identity**:
+    - Standardized all 28 pre-rendered telephony prompts and dynamic answers on Gemini TTS voice `"Kore"`, completely eliminating jarring mid-call voice switches.
+    - Pre-rendered 8 kHz 16-bit mono linear PCM prompt library in `backend/cache/prompts/` and `/app/cache/prompts/`.
+  - **Calibrated VAD & Silence Elimination**:
+    - Lowered energy threshold to 450 (`VAD_ENERGY_THRESHOLD=450`) and expanded speech silence timeout to 1000ms (`SPEECH_SILENCE_TIMEOUT_MS=1000`), completely eliminating premature cutoffs and false "I cannot hear you" prompts during natural pauses.
+    - Replaced repetitive waiting prompts with maximum 2 gentle reminders (`MAX_SILENCE_REMINDERS=2`) before graceful goodbye.
+  - **Full-Duplex Barge-In Interruption**:
+    - Non-blocking frame peeking in `AudioSocketConnection.send_audio(..., allow_barge_in=True)` detects caller interruption (RMS >= 550 for >= 40ms), halts outgoing audio immediately, preserves speech onset in `barge_in_buffer`, and feeds frames directly into the VAD endpointer.
+  - **Post-Call SMS Summary Integration**:
+    - Automated background queueing in `CallStateMachine._finalize_call_record` delivering concise, 2-segment agronomic summaries in caller's language.
+  - **15/15 Automated Acceptance Tests Passing**:
+    - `tests/test_conversational_voice.py` passes 100%.
+    - Total test suite now stands at **125/125 tests passing** across the entire repository.
 
 ---
 

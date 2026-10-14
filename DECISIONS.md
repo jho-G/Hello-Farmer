@@ -182,4 +182,37 @@ This document records architectural, algorithmic, and engineering decisions made
   - Delivers state-of-the-art multilingual voice quality for Ethiopian farmers with low latency.
   - Keeps the entire system modular, resilient against network/quota disruptions, and free-tier compliant.
 
+---
 
+## 19. Conversational Voice Turn-Taking, Full-Duplex Barge-In, Calibrated VAD, and Voice Identity Consistency
+- **Decision**:
+  1. **Strict 3-Step Opening Flow**:
+     - **Step 1 (Greeting & Recording Disclosure)**: Immediate playback of short pre-rendered greeting ("Hello, welcome to Hello Farmer. This call is being recorded to improve our service.") without waiting for caller or asking yes/no confirmation.
+     - **Step 2 (Location Collection)**: Asks "Which area are you calling from?" in the active language (`ask_location`), transcribes via Gemini STT, cleans spoken prefixes, resolves structured geography with ambiguity clarification (`clarify_region`), and **never silently defaults to Addis Ababa**.
+     - **Step 3 (Agricultural Problem Solicitation)**: Plays `ask_problem` ("What farming problem can I help you with today?") and seamlessly enters the interactive multi-turn loop.
+  2. **Calibrated Silence & False-Silence Prompt Elimination**:
+     - Tuned `VAD_ENERGY_THRESHOLD=450` and `SPEECH_SILENCE_TIMEOUT_MS=1000ms` (1 second) to protect normal speaking pauses and prevent cutting off farmers.
+     - Initial silence timeout set to 8–10 seconds.
+     - Replaced nagging filler messages with a maximum of 2 gentle reminders (`MAX_SILENCE_REMINDERS=2`) before graceful goodbye.
+  3. **Full-Duplex Barge-In Interruption**:
+     - Upgraded `AudioSocketConnection.send_audio(..., allow_barge_in=True)` to inspect incoming 20ms frames while streaming outgoing audio. When caller voice is detected (RMS >= 550 for >= 40ms), playback stops instantly, onset frames are preserved in `barge_in_buffer`, and the conversation loop transitions directly to the listening state without losing syllables.
+  4. **100% Unified Voice Identity**:
+     - Standardized all 28 fixed prompt WAVs and dynamic answers on Gemini TTS (`gemini-3.8-flash-tts`, prebuilt voice `"Kore"`), eliminating mid-call voice switches.
+     - Automated resampling pipeline decodes 24 kHz audio and applies bandpass filtering to 8 kHz 16-bit mono linear PCM.
+  5. **Post-Call SMS Summary Integration**:
+     - `_finalize_call_record` automatically triggers `trigger_post_call_summary` upon call completion to deliver a concise 2-segment SMS summary of actionable agronomic recommendations in the caller's language.
+- **Rationale**:
+  - Smallholder farmers with basic phones require natural, uninterrupted turn-taking without confusing menus or jarring voice changes.
+  - Barge-in gives farmers control to interrupt long explanations when they already have their answer.
+  - Prevents alert fatigue and ensures reliable communication over rural telephony connections.
+---
+
+## 20. Free-Tier Priority Strategy: Groq LLM & Edge-TTS/Google TTS for Production MVP
+- **Decision**:
+  1. **Primary LLM Reasoning**: Prioritize **Groq API** (`qwen/qwen3.8-27b`) as the primary agricultural reasoning provider (`LLM_PROVIDER=groq`), using Google Gemini Flash as an automatic fallback.
+  2. **Primary Text-to-Speech (TTS)**: Prioritize **Edge-TTS + Google TTS** as the primary multi-tier speech synthesis engine (`TTS_PROVIDER=edge_tts`), avoiding Gemini TTS free-tier quota exhaustion (`limit: 10 requests/day`).
+  3. **Immediate Thinking Acknowledgment**: When a farmer concludes their query, the telephony state machine plays `one_moment` ("አንድ አፍታ ይጠብቁ..." / "Yeroo gabaabaa eegaa...") immediately before launching background RAG + LLM reasoning, eliminating dead silence, keeping the Asterisk RTP stream active, and assuring the caller that their question was received.
+- **Rationale**:
+  - The Gemini free-tier quota for `gemini-3.8-flash-tts` is restricted to 10 requests per day per project, which quickly exhausts in real-world telephony testing and causes long 429 delays.
+  - Groq API provides generous free-tier throughput with sub-second inference latency on `qwen/qwen3.8-27b`, adhering to strict JSON output schemas and grounding agricultural answers accurately.
+  - Edge-TTS and Google Translate TTS are zero-cost, highly available, and generate fluent Amharic and English speech with sub-second generation times.

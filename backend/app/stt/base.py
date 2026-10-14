@@ -19,7 +19,7 @@ class Transcript(BaseModel):
 
 class BaseSTTProvider(ABC):
     @abstractmethod
-    async def transcribe(self, wav_path_or_bytes: str | bytes, language: str = "am") -> Transcript:
+    async def transcribe(self, wav_path_or_bytes: str | bytes, language: str = "am", **kwargs) -> Transcript:
         """Transcribe speech audio into text.
 
         Args:
