@@ -130,12 +130,48 @@ Current Status: **Phase 4 (LLM and Guardrails) - COMPLETED ✅ | Ready for Phase
 
 ---
 
-## 2. What is Next (Phase 12: Evaluation & Pilot Readiness)
-- [ ] VAD Endpointing evaluation (`eval/endpointing_eval.py`).
-- [ ] Concurrency & turn latency benchmarking (`eval/latency_report.py`).
-- [ ] Automated headless SIP softphone test into Asterisk.
-- [ ] Comprehensive path to production documentation (`docs/path_to_production.md`, `docs/scaling_costs.md`).
-- [ ] Final acceptance verification against the 12-item acceptance checklist.
+- [x] **Phase 12 (Location-Aware Agricultural Voice Agent & Ingested Knowledge Base)**:
+  - **Comprehensive Ingestion**: 96 agricultural research documents and 8,104 chunks indexed into PostgreSQL `pgvector` (`knowledge_chunks` and `agricultural_documents`), covering Ethiopian highland and lowland agronomy, wheat rust, teff management, vertisol drainage, and regional research center findings (Kulumsa, Bako, Melkassa, Debre Zeit, Adet).
+  - **Location-First State Machine**: Explicit call states in `backend/app/telephony/call_flow.py`: `GREETING` -> `LOCATION_COLLECTION` -> `LOCATION_CLARIFICATION` -> `AGRICULTURAL_QUERY` -> `KNOWLEDGE_RETRIEVAL` -> `RESPONSE_GENERATION` -> `CLOSING` -> `COMPLETED`.
+  - **Mandatory Combined Greeting & Notice**: Plays brief recording notice and immediately asks for caller's town or nearby city with **NO verbal yes/no consent question**.
+  - **Geocoding & Spoken Prefix Cleaning**: Strips Ge'ez prefixes ("ከ", "በ") and colloquial conversational wrappers ("ነው", "ነኝ", "አካባቢ", "irraa", "keessaa") in `backend/app/weather/location.py`. Resolves to structured location (town, woreda, zone, region, coordinates, agroecology, confidence).
+  - **Ambiguity & Non-Default Guardrails**: Resolves ambiguous names with at most one concise clarification ("Which region is that in?"); unknown locations **never default to Addis Ababa**.
+  - **Location-Aware pgvector RAG Retrieval**: Implements tiered boosting in `backend/app/rag/retrieve.py` (+0.20 locality, +0.12 region, +0.08 agroecology) while preserving national-level guidance as a trustworthy fallback.
+  - **Configurable Recording Policy**: Added `RECORDING_POLICY="transient_only"` in `backend/app/config.py` to discard ephemeral 20ms audio frames immediately after transcription, logging notice status in `calls.recording_consent_status="notice_announced"`.
+  - **Pre-rendered Prompts**: 32 pre-rendered 8 kHz WAV files in `backend/cache/prompts/` across Amharic, Afaan Oromoo, and English.
+  - **Automated Test Suite**: 13 automated tests passing in `tests/test_location_aware_voice.py`.
+
+---
+
+- [x] **Phase 14 (Gemini-First Voice AI Architecture & Location-Aware Grounding)**:
+  - **Gemini STT Implementation**:
+    - Primary provider `GeminiSTTProvider` utilizing `google-genai` SDK (`gemini-3.5-transcribe` with auto-resolution to multimodal `gemini-3.5-flash`).
+    - Audio normalization: Energy RMS gating (< 0.003) and minimum speech length gating (< 0.25s) automatically skips unnecessary API calls to protect free-tier quotas.
+    - Agricultural domain biasing in authentic Amharic (Fidel) and Afaan Oromo (Qubee).
+    - Rate limit & fallback handling: instantaneous fallback cascade to `GroqSTTProvider` and offline `WhisperLocalSTTProvider` on HTTP 429 quota exhaustion (3 RPM free-tier limit) or API errors without blocking the caller.
+  - **Hybrid Agricultural Answering (RAG + Location-Aware Fallback)**:
+    - RAG remains the first trusted factual source (`evidence_mode="rag_grounded"`).
+    - Cautious fallback reasoning (`evidence_mode="location_aware_model_answer"`): when RAG contains insufficient or no relevant documents, Gemini formulates a cautious recommendation grounded in the caller's confirmed location (woreda/region/agroecological zone) and real-time weather (Open-Meteo).
+    - Agronomic safety guardrails: strict rejection of invented chemical/herbicide doses, unverified fertilizer recipes, and unsupported yield claims; provides safe physical/cultural steps and refers to local Development Agents (DA) or 8028.
+  - **Gemini TTS Implementation**:
+    - Primary provider `GeminiTTSProvider` utilizing `gemini-3.8-flash-tts` with expressive prebuilt voice `"Kore"`.
+    - Real audio downsampling/resampling: converts 24 kHz 16-bit mono WAV into 8 kHz 16-bit signed linear mono PCM (`audio_stream_to_pcm8k`) strictly required by Asterisk AudioSocket and Linphone.
+    - Automatic fallback cascade to Edge-TTS (`am-ET-AmehaNeural` / `am-ET-MekdesNeural`) and Google TTS when quotas or connectivity limits occur.
+  - **Telemetry & Observability**:
+    - Per-stage latency metrics tracking (`stt`, `rag`, `llm`, `tts`, `total`).
+    - Structured output with `evidence_mode`, `location_used`, `sources`, `confidence`, and provider attribution.
+    - Zero leaks of API secrets, SIP credentials, or raw internal prompts.
+  - **Automated Test Suite**:
+    - 14 comprehensive tests in `tests/test_gemini_providers.py` covering Section 10 acceptance criteria passing 100%.
+    - Full test suite passing across all 110 tests.
+
+---
+
+## 2. What is Next (Phase 15: Live Pilot & Field Deployment Readiness)
+- [ ] Field evaluation with rural farmers across Oromia, Amhara, Sidama, and Tigray.
+- [ ] Concurrency and network turn latency benchmarking under simulated 2G/3G mobile networks.
+- [ ] Final deployment documentation and operational runbook.
+
 
 
 

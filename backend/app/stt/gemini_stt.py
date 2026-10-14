@@ -1,14 +1,26 @@
 """Google Gemini Audio Speech-to-Text (STT) Provider.
 
-Transcribes telephony audio by passing 16 kHz WAV directly to Gemini Flash Lite.
-Permissively licensed and SOTA for Ethiopian languages (Amharic and Afaan Oromo).
+Primary speech-to-text engine for Hello Farmer telephony and web voice pipelines.
+Uses the modern Google GenAI SDK (gemini-3.5-transcribe / gemini-3.5-flash) with
+domain biasing for Ethiopian smallholder farming vocabulary (Amharic & Afaan Oromo).
+
+Features:
+- Telephony-aware audio normalization (16 kHz WAV, AGC, pre-emphasis)
+- Silence/noise energy gating (prevents wasted API calls on background noise)
+- Native multimodal & dedicated audio transcription parsing
+- Preservation of original language without unwanted English translation
+- Bounded exponential backoff retry for transient 503 errors
+- Resilient fallback delegation to Groq/Whisper when free-tier quotas (3 RPM) are exceeded
+- Structured Transcript metadata (model, latency, provider, confidence)
 """
+import asyncio
 import io
 import logging
 import time
 import wave
+from typing import Optional
 
-import google.generativeai as genai
+import numpy as np
 
 try:
     from app.audio.convert import pcm8k_to_pcm16k
@@ -23,88 +35,372 @@ except ImportError:
     from backend.app.stt.base import BaseSTTProvider, Transcript
     from backend.app.stt.prompts import get_stt_biasing_prompt
 
-
 logger = logging.getLogger("hello_farmer.stt.gemini")
 
 
 class GeminiSTTProvider(BaseSTTProvider):
-    def __init__(self, api_key: str | None = None, model_name: str = "gemini-2.5-flash-lite"):
-        self.api_key = api_key or settings.GEMINI_API_KEY
-        self.model_name = model_name
+    """Google Gemini STT provider with dedicated transcription and telephony fallback."""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model_name: str | None = None,
+        fallback_provider: Optional[BaseSTTProvider] = None,
+    ):
+        self.api_key = api_key or getattr(settings, "GEMINI_API_KEY", None)
+        self.model_name = (
+            model_name
+            or getattr(settings, "GEMINI_STT_MODEL", None)
+            or getattr(settings, "STT_GEMINI_MODEL", "gemini-3.5-transcribe")
+        )
+        self._fallback_provider = fallback_provider
+        self._genai_client = None
+        self._legacy_genai = None
         self._is_configured = False
 
-        if self.api_key and self.api_key != "your_gemini_api_key_here":
-            try:
-                genai.configure(api_key=self.api_key)
-                self._is_configured = True
-            except Exception as e:
-                logger.warning(f"Could not configure Google Generative AI client: {e}")
+        self._init_client()
 
-    def _prepare_audio(self, wav_path_or_bytes: str | bytes) -> bytes:
-        """Preprocess audio with AGC, pre-emphasis, and 16kHz WAV packaging."""
+    def _init_client(self):
+        """Initialize Google GenAI client (prefer modern google-genai, fallback to legacy)."""
+        if not self.api_key or self.api_key == "your_gemini_api_key_here":
+            logger.warning("GEMINI_API_KEY not configured for Gemini STT provider.")
+            return
+
+        # 1. Try modern google-genai SDK
+        try:
+            from google import genai
+            self._genai_client = genai.Client(api_key=self.api_key)
+            self._is_configured = True
+            logger.info("Initialized modern google-genai client for Gemini STT (%s)", self.model_name)
+            return
+        except ImportError:
+            logger.debug("google-genai SDK not available, attempting google.generativeai fallback.")
+        except Exception as e:
+            logger.warning("Failed to initialize google-genai client: %s", e)
+
+        # 2. Try legacy google.generativeai SDK
+        try:
+            import google.generativeai as legacy_genai
+            legacy_genai.configure(api_key=self.api_key)
+            self._legacy_genai = legacy_genai
+            self._is_configured = True
+            logger.info("Initialized legacy google.generativeai for Gemini STT (%s)", self.model_name)
+        except Exception as e:
+            logger.error("Could not configure any Google Gemini client for STT: %s", e)
+
+    def _get_fallback_provider(self) -> Optional[BaseSTTProvider]:
+        """Lazy load configured fallback STT provider (Groq or local Whisper)."""
+        if self._fallback_provider is not None:
+            return self._fallback_provider
+
+        fallback_type = getattr(settings, "STT_FALLBACK_PROVIDER", "groq").lower()
+        try:
+            if fallback_type == "groq" and getattr(settings, "GROQ_API_KEY", None):
+                try:
+                    from app.stt.groq_stt import GroqSTTProvider
+                except ImportError:
+                    from backend.app.stt.groq_stt import GroqSTTProvider
+                self._fallback_provider = GroqSTTProvider()
+            else:
+                try:
+                    from app.stt.whisper_local import WhisperLocalSTTProvider
+                except ImportError:
+                    from backend.app.stt.whisper_local import WhisperLocalSTTProvider
+                self._fallback_provider = WhisperLocalSTTProvider()
+        except Exception as err:
+            logger.warning("Could not initialize STT fallback provider '%s': %s", fallback_type, err)
+        return self._fallback_provider
+
+    def _prepare_audio(self, wav_path_or_bytes: str | bytes) -> tuple[bytes, float, float]:
+        """Preprocess audio with AGC, pre-emphasis, and silence/duration detection.
+
+        Returns:
+            Tuple of (preprocessed_wav_16k_bytes, duration_seconds, rms_energy).
+        """
         if isinstance(wav_path_or_bytes, str):
-            with open(wav_path_or_bytes, "rb") as f:
-                raw_bytes = f.read()
+            try:
+                with open(wav_path_or_bytes, "rb") as f:
+                    raw_bytes = f.read()
+            except Exception as e:
+                logger.error("Failed to read audio file '%s': %s", wav_path_or_bytes, e)
+                return b"", 0.0, 0.0
         elif isinstance(wav_path_or_bytes, bytes):
             raw_bytes = wav_path_or_bytes
         else:
-            return b""
-        return preprocess_speech_for_stt(raw_bytes, is_8k_pcm=not raw_bytes.startswith(b"RIFF"))
+            return b"", 0.0, 0.0
+
+        if not raw_bytes or len(raw_bytes) < 32:
+            return b"", 0.0, 0.0
+
+        is_8k = not raw_bytes.startswith(b"RIFF")
+        wav_16k = preprocess_speech_for_stt(raw_bytes, is_8k_pcm=is_8k)
+        if not wav_16k or len(wav_16k) < 44:
+            return b"", 0.0, 0.0
+
+        duration_sec = 0.0
+        rms_energy = 0.0
+        try:
+            with wave.open(io.BytesIO(wav_16k), "rb") as wf:
+                framerate = wf.getframerate()
+                nframes = wf.getnframes()
+                duration_sec = nframes / float(framerate) if framerate > 0 else 0.0
+                frames = wf.readframes(nframes)
+                if frames:
+                    samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+                    rms_energy = float(np.sqrt(np.mean(samples**2)))
+        except Exception as e:
+            logger.debug("Could not inspect audio stats: %s", e)
+
+        return wav_16k, duration_sec, rms_energy
 
     async def transcribe(self, wav_path_or_bytes: str | bytes, language: str = "am") -> Transcript:
-        """Transcribe audio using Google Gemini multimodal audio transcription."""
+        """Transcribe farmer speech using Gemini API with bounded fallback."""
         start_time = time.perf_counter()
-        lang_name = "Amharic (አማርኛ in Ge'ez script)" if language == "am" else "Afaan Oromo (in Latin Qubee script)"
+        lang_code = "om" if language in ("om", "oromo") else "am"
+        lang_name = "Amharic (አማርኛ in Ge'ez script)" if lang_code == "am" else "Afaan Oromo (in Latin Qubee script)"
 
-        audio_data = self._prepare_audio(wav_path_or_bytes)
+        # Step 1: Preprocess and detect silence
+        audio_data, duration_sec, rms = self._prepare_audio(wav_path_or_bytes)
+        elapsed_prep = (time.perf_counter() - start_time) * 1000.0
 
-        if not self._is_configured or not audio_data:
-            latency_ms = (time.perf_counter() - start_time) * 1000.0
+        # Silence gating: short or near-silent utterances should not hit the Gemini API
+        if not audio_data or duration_sec < 0.25 or rms < 0.003:
+            logger.debug(
+                "Audio is silence or too short (duration=%.2fs, rms=%.5f). Skipping Gemini STT call.",
+                duration_sec,
+                rms,
+            )
             return Transcript(
                 text="",
                 confidence=0.0,
-                provider="gemini_unconfigured",
-                latency_ms=latency_ms,
-                language=language,
+                provider="gemini_silence",
+                model=self.model_name,
+                latency_ms=elapsed_prep,
+                language=lang_code,
+                processing_duration_sec=duration_sec,
             )
 
-        domain_bias = get_stt_biasing_prompt(language)
-        prompt = (
-            f"You are a specialized speech-to-text transcriber for {lang_name} spoken by Ethiopian farmers over telephone.\n"
-            f"Agricultural domain context and common terms: {domain_bias}\n"
-            "Listen carefully to this audio recording and transcribe verbatim exactly what was spoken.\n"
-            "Return ONLY the authentic transcription text with no introduction, no conversational filler, and no translation."
+        # Step 2: Verify provider configuration
+        if not self._is_configured:
+            logger.warning("Gemini STT is not configured. Falling back to alternative STT provider.")
+            return await self._delegate_to_fallback(
+                wav_path_or_bytes=wav_path_or_bytes,
+                language=lang_code,
+                error_reason="GEMINI_API_KEY_NOT_CONFIGURED",
+                start_time=start_time,
+            )
+
+        # Step 3: Build domain biasing and transcription instruction
+        domain_bias = get_stt_biasing_prompt(lang_code)
+        if lang_code == "om":
+            instruction = (
+                f"Transcribe this speech accurately in {lang_name} (using Latin Qubee script). "
+                f"Agricultural vocabulary context: {domain_bias}. "
+                "Do NOT translate into English or add commentary. Return only the transcription verbatim."
+            )
+        else:
+            instruction = (
+                f"Transcribe this speech accurately in authentic {lang_name} (Ethiopic Fidel script). "
+                f"Agricultural vocabulary context: {domain_bias}. "
+                "Do NOT translate into English or add commentary. Return only the transcription verbatim."
+            )
+
+        # Step 4: Execute Gemini STT call with bounded retries and exponential backoff
+        max_attempts = 2
+        last_error = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                raw_text, detected_lang = await self._call_gemini_api(instruction, audio_data)
+                clean_text = raw_text.strip() if raw_text else ""
+
+                if not clean_text:
+                    logger.info("Gemini STT returned empty transcript for non-silent audio; delegating to fallback STT.")
+                    return await self._delegate_to_fallback(
+                        wav_path_or_bytes=wav_path_or_bytes,
+                        language=lang_code,
+                        error_reason="GEMINI_EMPTY_TRANSCRIPT",
+                        start_time=start_time,
+                    )
+
+                total_latency = (time.perf_counter() - start_time) * 1000.0
+                confidence = 0.95 if len(clean_text) > 2 else 0.0
+
+                logger.info(
+                    "Gemini STT [%s] transcribed (%d chars) in %.1fms: '%s'",
+                    self.model_name,
+                    len(clean_text),
+                    total_latency,
+                    clean_text,
+                )
+
+                return Transcript(
+                    text=clean_text,
+                    confidence=confidence,
+                    provider="gemini",
+                    model=self.model_name,
+                    latency_ms=total_latency,
+                    language=lang_code,
+                    detected_language=detected_lang or lang_code,
+                    processing_duration_sec=duration_sec,
+                )
+
+            except Exception as err:
+                last_error = str(err)
+                err_lower = last_error.lower()
+                is_rate_limit = "429" in last_error or "quota" in err_lower or "resource_exhausted" in err_lower
+                is_transient = "503" in last_error or "unavailable" in err_lower or "timeout" in err_lower
+
+                logger.warning(
+                    "Gemini STT attempt %d failed: %s (rate_limit=%s, transient=%s)",
+                    attempt,
+                    last_error,
+                    is_rate_limit,
+                    is_transient,
+                )
+
+                if is_rate_limit:
+                    # Free tier quota exhausted (e.g. 3 RPM exceeded) -> do not block, cascade immediately
+                    logger.info("Gemini STT quota limit reached. Cascading immediately to fallback provider.")
+                    break
+
+                if attempt < max_attempts and is_transient:
+                    backoff_sec = 0.8 * (2 ** (attempt - 1))
+                    await asyncio.sleep(backoff_sec)
+                    continue
+                break
+
+        # Step 5: Fallback delegation on error or quota exhaustion
+        return await self._delegate_to_fallback(
+            wav_path_or_bytes=wav_path_or_bytes,
+            language=lang_code,
+            error_reason=last_error or "Gemini API error",
+            start_time=start_time,
         )
 
-        try:
-            model = genai.GenerativeModel(self.model_name)
-            response = await model.generate_content_async(
-                [
-                    prompt,
-                    {
-                        "mime_type": "audio/wav",
-                        "data": audio_data,
-                    },
-                ]
-            )
-            raw_text = response.text.strip() if response.text else ""
-            latency_ms = (time.perf_counter() - start_time) * 1000.0
-            logger.info(f"Gemini STT ({self.model_name}) transcribed in {latency_ms:.1f}ms: '{raw_text}'")
-            return Transcript(
-                text=raw_text,
-                confidence=0.95 if raw_text else 0.0,
-                provider="gemini",
-                latency_ms=latency_ms,
-                language=language,
-            )
-        except Exception as e:
-            logger.error(f"Gemini STT transcription error: {e}")
-            latency_ms = (time.perf_counter() - start_time) * 1000.0
-            return Transcript(
-                text="",
-                confidence=0.0,
-                provider="gemini_error",
-                latency_ms=latency_ms,
-                language=language,
+    async def _call_gemini_api(self, prompt: str, audio_bytes: bytes) -> tuple[str, Optional[str]]:
+        """Call Gemini API using modern google-genai SDK or legacy fallback."""
+        if self._genai_client:
+            from google.genai import types
+
+            loop = asyncio.get_running_loop()
+            audio_part = types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav")
+
+            # Try primary model, auto-resolving legacy names if needed
+            model_to_use = self.model_name
+            if model_to_use in ("gemini-flash-latest", "gemini-2.5-flash"):
+                model_to_use = "gemini-3.5-transcribe"
+
+            def _sync_generate():
+                return self._genai_client.models.generate_content(
+                    model=model_to_use,
+                    contents=[prompt, audio_part],
+                )
+
+            response = await asyncio.wait_for(
+                loop.run_in_executor(None, _sync_generate),
+                timeout=getattr(settings, "GEMINI_TIMEOUT_SECONDS", 12.0),
             )
 
+            # Parse response parts
+            transcript_text = ""
+            detected_lang = None
+
+            candidates = getattr(response, "candidates", []) or []
+            if candidates:
+                parts = getattr(candidates[0].content, "parts", []) or []
+                for pt in parts:
+                    # Check for dedicated audio_transcription attribute (gemini-3.5-transcribe)
+                    at = getattr(pt, "audio_transcription", None)
+                    if at is not None:
+                        if hasattr(at, "text") and at.text:
+                            transcript_text += at.text + " "
+                        if hasattr(at, "language_code") and at.language_code:
+                            detected_lang = at.language_code
+                    # Check for regular text attribute
+                    txt = getattr(pt, "text", None)
+                    if txt:
+                        transcript_text += txt + " "
+
+            if not transcript_text and hasattr(response, "text") and response.text:
+                transcript_text = response.text
+
+            return transcript_text.strip(), detected_lang
+
+        elif self._legacy_genai:
+            model = self._legacy_genai.GenerativeModel(self.model_name)
+            response = await asyncio.wait_for(
+                model.generate_content_async(
+                    [
+                        prompt,
+                        {
+                            "mime_type": "audio/wav",
+                            "data": audio_bytes,
+                        },
+                    ]
+                ),
+                timeout=getattr(settings, "GEMINI_TIMEOUT_SECONDS", 12.0),
+            )
+            raw = response.text.strip() if response and response.text else ""
+            return raw, None
+
+        raise RuntimeError("No configured Google Gemini client is available.")
+
+    async def _delegate_to_fallback(
+        self,
+        wav_path_or_bytes: str | bytes,
+        language: str,
+        error_reason: str,
+        start_time: float,
+    ) -> Transcript:
+        """Seamlessly delegate transcription to the configured fallback STT provider."""
+        fallback = self._get_fallback_provider()
+        if fallback:
+            try:
+                logger.info(
+                    "Switching STT provider from Gemini to %s due to: %s",
+                    fallback.__class__.__name__,
+                    error_reason,
+                )
+                fb_transcript = await fallback.transcribe(wav_path_or_bytes, language=language)
+
+                # If primary fallback produced empty text (e.g. unsupported Oromo in Whisper cloud), cascade to local Whisper
+                if not fb_transcript.text:
+                    try:
+                        try:
+                            from app.stt.whisper_local import WhisperLocalSTTProvider
+                        except ImportError:
+                            from backend.app.stt.whisper_local import WhisperLocalSTTProvider
+                        offline_whisper = WhisperLocalSTTProvider()
+                        fb_transcript = await offline_whisper.transcribe(wav_path_or_bytes, language=language)
+                    except Exception as off_err:
+                        logger.debug("Offline Whisper cascade failed: %s", off_err)
+
+                total_latency = (time.perf_counter() - start_time) * 1000.0
+
+                return Transcript(
+                    text=fb_transcript.text,
+                    confidence=fb_transcript.confidence,
+                    provider=fb_transcript.provider,
+                    model=getattr(fb_transcript, "model", None) or "fallback_stt",
+                    latency_ms=total_latency,
+                    language=language,
+                    detected_language=getattr(fb_transcript, "detected_language", language),
+                    fallback_used=True,
+                    error=f"Gemini STT failed: {error_reason}",
+                    processing_duration_sec=getattr(fb_transcript, "processing_duration_sec", None),
+                )
+            except Exception as fb_err:
+                logger.error("Fallback STT provider also failed: %s", fb_err)
+
+        total_latency = (time.perf_counter() - start_time) * 1000.0
+        return Transcript(
+            text="",
+            confidence=0.0,
+            provider="gemini_failed",
+            model=self.model_name,
+            latency_ms=total_latency,
+            language=language,
+            fallback_used=True,
+            error=f"All STT providers failed. Last error: {error_reason}",
+        )

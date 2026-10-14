@@ -6,10 +6,15 @@ from pydantic import BaseModel
 
 class Transcript(BaseModel):
     text: str
-    confidence: float
-    provider: str
-    latency_ms: float
-    language: str
+    confidence: float = 0.0
+    provider: str = "unknown"
+    model: str | None = None
+    latency_ms: float = 0.0
+    language: str = "am"
+    detected_language: str | None = None
+    fallback_used: bool = False
+    error: str | None = None
+    processing_duration_sec: float | None = None
 
 
 class BaseSTTProvider(ABC):

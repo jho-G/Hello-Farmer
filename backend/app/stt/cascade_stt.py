@@ -36,9 +36,11 @@ class CascadingSTTProvider(BaseSTTProvider):
     ):
         self.min_confidence_threshold = min_confidence_threshold
 
-        # Configure primary and secondary based on available API keys
+        # Configure primary and secondary based on available API keys (Gemini-first)
         if primary is not None:
             self.primary = primary
+        elif settings.GEMINI_API_KEY and getattr(settings, "STT_PROVIDER", "gemini") == "gemini":
+            self.primary = GeminiSTTProvider()
         elif settings.GROQ_API_KEY:
             self.primary = GroqSTTProvider()
         elif settings.GEMINI_API_KEY:
@@ -48,10 +50,10 @@ class CascadingSTTProvider(BaseSTTProvider):
 
         if secondary is not None:
             self.secondary = secondary
-        elif settings.GEMINI_API_KEY and isinstance(self.primary, GroqSTTProvider):
-            self.secondary = GeminiSTTProvider()
         elif settings.GROQ_API_KEY and isinstance(self.primary, GeminiSTTProvider):
             self.secondary = GroqSTTProvider()
+        elif settings.GEMINI_API_KEY and isinstance(self.primary, GroqSTTProvider):
+            self.secondary = GeminiSTTProvider()
         else:
             self.secondary = WhisperLocalSTTProvider()
 

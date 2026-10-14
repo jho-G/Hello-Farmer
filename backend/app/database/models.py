@@ -78,6 +78,15 @@ class Call(Base):
     started_at = Column(DateTime, default=datetime.utcnow)
     ended_at = Column(DateTime, nullable=True)
 
+    # Location & Recording Context
+    location_name = Column(String(100), nullable=True)
+    region = Column(String(100), nullable=True)
+    zone = Column(String(100), nullable=True)
+    woreda = Column(String(100), nullable=True)
+    location_confidence = Column(Float, nullable=True)
+    agroecological_zone = Column(String(50), nullable=True)
+    recording_consent_status = Column(String(50), default="notice_announced")
+
     messages = relationship("ConversationMessage", back_populates="call")
 
 

@@ -75,9 +75,18 @@ class SessionState(BaseModel):
     caller_hash: str
     language: str = "am"
     is_first_time: bool = True
-    has_consented: bool = False
+    has_consented: bool = True
     turn_count: int = 0
     consecutive_silence_count: int = 0
+    call_stage: str = "GREETING"
+    location_name: str | None = None
+    location_region: str | None = None
+    location_zone: str | None = None
+    location_woreda: str | None = None
+    location_latitude: float | None = None
+    location_longitude: float | None = None
+    location_confidence: float | None = None
+    agroecological_zone: str | None = None
     extracted_crop: str | None = None
     extracted_symptoms: str | None = None
     extracted_location: str | None = None
@@ -88,12 +97,21 @@ class SessionState(BaseModel):
 class ResponseMetadata(BaseModel):
     grounded: bool
     needs_referral: bool = False
+    evidence_mode: str = "rag_grounded"  # rag_grounded | location_aware_model_answer | clarification_needed | expert_referral
     sources_used: list[dict[str, Any]] = Field(default_factory=list)
+    location_used: str | None = None
     confidence: float = 1.0
     topic: str | None = None
+    follow_up_question: str | None = None
+    safety_note: str | None = None
+    stt_provider: str | None = None
+    llm_provider: str | None = None
+    tts_provider: str | None = None
+    fallback_used: bool = False
     latency_ms: dict[str, float] = Field(default_factory=dict)
     answer_en_gloss: str | None = None
     user_transcript: str | None = None
+    language: str = "am"
 
 
 class Response(BaseModel):
@@ -144,6 +162,18 @@ def is_greeting_intent(text: str, language: str = "am") -> bool:
     return False
 
 
+def is_off_topic_query(text: str, language: str = "am") -> bool:
+    """Detect queries unrelated to agriculture, crops, or livestock."""
+    OFF_TOPIC_WORDS = [
+        "konkolaataa", "makiinaa", "makina", "መኪና", "ቴሌ", "tele", "football", "kubbaa", "ኳስ",
+        "visa", "ፓስፖርት", "passport", "film", "movie", "ሙዚቃ", "muuziqaa", "music",
+        "መንግስት መኪና", "gurgura konkolaataa"
+    ]
+    t = text.lower()
+    return any(w in t for w in OFF_TOPIC_WORDS)
+
+
+
 async def process_utterance(
     audio_bytes: bytes | None,
     session: SessionState,
@@ -162,6 +192,8 @@ async def process_utterance(
     """
     t0 = time.time()
     latencies: dict[str, float] = {}
+    stt_provider_name = "text_input"
+    stt_fallback_used = False
 
     # 1. Speech-to-Text / Text Resolution
     if text_override:
@@ -171,6 +203,8 @@ async def process_utterance(
         stt = get_stt_provider()
         transcript_obj = await stt.transcribe(audio_bytes, language=session.language)
         user_text = transcript_obj.text.strip()
+        stt_provider_name = getattr(transcript_obj, "provider", stt.__class__.__name__)
+        stt_fallback_used = getattr(transcript_obj, "fallback_used", False)
         latencies["stt"] = round((time.time() - stt_t0) * 1000, 1)
     else:
         user_text = ""
@@ -244,6 +278,31 @@ async def process_utterance(
                 confidence=1.0,
                 latency_ms={"total": round((time.time() - t0) * 1000, 1)},
                 answer_en_gloss="Hello! I am Hello Farmer agricultural assistant. How can I assist you with your farming or crops today?",
+                user_transcript=user_text,
+            ),
+        )
+
+    # 2d. Off-topic Non-Agricultural Query Flow
+    if is_off_topic_query(user_text, session.language):
+        referral_reply = (
+            "ይቅርታ፣ ይህ ጥያቄ ከግብርና ውጭ ነው። ለግብርና መረጃ እባክዎ የአካባቢዎን የግብርና ልማት ጣቢያ ባለሙያ ያማክሩ ወይም በስምንት ዜሮ ሁለት ስምንት (8028) ይደውሉ።"
+            if session.language == "am"
+            else "Dhiifama, gaaffiin kun qonnaan ala. Odeeffannoo qonnaaf maaloo ogeessa qonnaa naannoo keessanii gaafadhaa yookiin bilbila 8028 irratti bilbilaa."
+        )
+        audio_out = b""
+        if synthesize_audio:
+            tts = get_tts_provider()
+            audio_out = await tts.synthesize(referral_reply, language=session.language)
+        return Response(
+            audio=audio_out,
+            text=referral_reply,
+            metadata=ResponseMetadata(
+                grounded=False,
+                topic="off_topic",
+                needs_referral=True,
+                confidence=0.9,
+                latency_ms={"total": round((time.time() - t0) * 1000, 1)},
+                answer_en_gloss="This query is not agricultural. Please consult local extension worker or call 8028.",
                 user_transcript=user_text,
             ),
         )
@@ -410,22 +469,39 @@ async def process_utterance(
     except Exception as e:
         logger.warning("Live web search error: %s", e)
 
-    # Priority 2: Retrieve local vector DB passages from pgvector
+    # Resolve structured location match if available
+    loc_match = None
+    target_loc_name = session.location_name or session.extracted_location
+    if target_loc_name:
+        loc_match = resolve_location(target_loc_name, region_hint=session.location_region)
+        if loc_match:
+            session.location_name = loc_match.name
+            session.location_region = loc_match.region
+            session.location_zone = loc_match.zone
+            session.location_woreda = loc_match.woreda
+            session.location_latitude = loc_match.latitude
+            session.location_longitude = loc_match.longitude
+            session.location_confidence = loc_match.confidence
+            session.agroecological_zone = loc_match.agroecological_zone
+
+    # Priority 2: Retrieve local vector DB passages from pgvector with location awareness
     retrieved_passages_list = []
     try:
         async with async_session_factory() as db_session:
             retrieved_passages_list = await retrieve_passages(
                 query=search_query,
                 session=db_session,
-                top_k=3,
+                top_k=4,
                 crop_filter=session.extracted_crop,
+                location=loc_match,
+                region_filter=session.location_region,
             )
     except Exception as e:
         logger.warning("Local DB retrieval error: %s", e)
 
     latencies["rag"] = round((time.time() - rag_t0) * 1000, 1)
 
-    # Combine: LIVE WEB PASSAGES COME FIRST (TOP PRIORITY), followed by local DB passages
+    # Combine: LIVE WEB PASSAGES COME FIRST, followed by local DB passages
     retrieved_dicts = []
     for wp in web_passages:
         retrieved_dicts.append({
@@ -435,25 +511,16 @@ async def process_utterance(
             "text": wp["text"],
         })
     for p in retrieved_passages_list:
+        geo_tag = f" [{p.geographic_tier.upper()}]" if p.geographic_tier != "national" else ""
         retrieved_dicts.append({
             "chunk_id": p.chunk_id,
-            "title": f"[LOCAL EXTENSION GUIDE] {p.document_title}",
+            "title": f"[LOCAL EXTENSION GUIDE{geo_tag}] {p.document_title}",
             "source_tier": f"tier_{p.source_tier}",
             "text": p.content,
         })
 
-    # Ensure retrieved_dicts always contains actionable agronomic context
-    if not retrieved_dicts:
-        retrieved_dicts = [
-            {
-                "chunk_id": "general_ethiopia_agronomy",
-                "title": "MoA / FAO Agricultural Guidelines (Verified Advisory)",
-                "source_tier": "tier_1",
-                "text": "Ethiopian national agronomic guidelines: Best practices for smallholder crop management, soil fertility (NPS/Urea/compost), seasonal planting, weeding, and IPM pest prevention.",
-            }
-        ]
-
-    # Build sources list for metadata with live web search prioritized
+    # Retain retrieved_dicts without injecting fake passages if RAG returned nothing
+    # Build sources list for metadata with geographic tier attribution
     sources_used = []
     for wp in web_passages:
         sources_used.append({
@@ -461,49 +528,49 @@ async def process_utterance(
             "tier": 1,
             "score": wp.get("score", 0.98),
             "stored_in_rag": True,
+            "geographic_tier": "national",
         })
     for p in retrieved_passages_list:
         sources_used.append({
             "title": p.document_title,
             "tier": p.source_tier,
             "score": p.score,
+            "geographic_tier": p.geographic_tier,
+            "locality_match": p.locality_match,
         })
 
-    # If no sources found at all, add a general agronomic indicator
-    if not sources_used:
-        sources_used = [
-            {
-                "title": "MoA / FAO Agricultural Guidelines (Verified Advisory)",
-                "tier": 1,
-                "score": 0.85,
-            }
-        ]
-
-    # Live Weather check for spraying or field actions if location known
+    # Local Weather check for spraying or field actions if location known
     weather_summary = None
-    if session.extracted_location and any(k in user_text for k in ["መርጨት", "መድሃኒት", "መድኃኒት", "አረም", "ዘር", "biif", "spray", "plant"]):
+    if loc_match or (session.location_latitude and session.location_longitude):
         try:
-            loc_match = resolve_location(session.extracted_location)
-            if loc_match:
-                wp = get_weather_provider()
-                fc = await wp.get_forecast(latitude=loc_match.latitude, longitude=loc_match.longitude, days=1)
-                spray_eval = WeatherRiskAnalyzer.evaluate_spraying(fc)
-                weather_summary = {
-                    "location": loc_match.name,
-                    "spraying_advisory": spray_eval.reason_om if session.language == "om" else spray_eval.reason_am,
-                    "can_spray": spray_eval.can_spray,
-                }
-        except Exception:
-            pass
+            wp = get_weather_provider()
+            lat = loc_match.latitude if loc_match else session.location_latitude
+            lon = loc_match.longitude if loc_match else session.location_longitude
+            fc = await wp.get_forecast(latitude=lat, longitude=lon, days=1)
+            spray_eval = WeatherRiskAnalyzer.evaluate_spraying(fc)
+            weather_summary = {
+                "location": loc_match.name if loc_match else session.location_name,
+                "region": loc_match.region if loc_match else session.location_region,
+                "spraying_advisory": spray_eval.reason_om if session.language == "om" else spray_eval.reason_am,
+                "can_spray": spray_eval.can_spray,
+                "temp_c": fc.temperature_max_c,
+                "rain_prob": fc.precipitation_probability_max,
+            }
+        except Exception as e:
+            logger.debug("Weather context fetch error: %s", e)
 
-    # 5. LLM Answer Generation
+    # 5. LLM Answer Generation with full location & agroecological context
     llm_t0 = time.time()
     chain = LLMFallbackChain()
     farmer_ctx = {
         "crop": session.extracted_crop or "",
         "symptoms": session.extracted_symptoms or "",
-        "growth_stage": "",
-        "location": session.extracted_location or "",
+        "growth_stage": getattr(extracted, "growth_stage", "") or "",
+        "location": session.location_name or session.extracted_location or "",
+        "region": session.location_region or (loc_match.region if loc_match else ""),
+        "zone": session.location_zone or (loc_match.zone if loc_match else ""),
+        "woreda": session.location_woreda or (loc_match.woreda if loc_match else ""),
+        "agroecological_zone": session.agroecological_zone or (loc_match.agroecological_zone if loc_match else "Midland"),
     }
 
     raw_answer: LLMAnswer = await chain.generate_response(
@@ -523,12 +590,17 @@ async def process_utterance(
         language=session.language,
     )
 
-    latencies["total"] = round((time.time() - t0) * 1000, 1)
-
+    # 6. TTS Audio Synthesis
     audio_out = b""
+    tts_provider_name = None
     if synthesize_audio:
+        tts_t0 = time.time()
         tts = get_tts_provider()
+        tts_provider_name = getattr(tts, "provider_name", tts.__class__.__name__)
         audio_out = await tts.synthesize(safe_answer.answer, language=session.language)
+        latencies["tts"] = round((time.time() - tts_t0) * 1000, 1)
+
+    latencies["total"] = round((time.time() - t0) * 1000, 1)
 
     # Record turn in session history
     session.history.append({"role": "caller", "text": user_text})
@@ -540,11 +612,20 @@ async def process_utterance(
         metadata=ResponseMetadata(
             grounded=safe_answer.is_grounded,
             needs_referral=safe_answer.needs_referral,
+            evidence_mode=getattr(safe_answer, "evidence_mode", ("rag_grounded" if retrieved_dicts else "location_aware_model_answer")),
             sources_used=sources_used,
+            location_used=getattr(safe_answer, "location_used", None) or session.location_name,
             confidence=safe_answer.confidence,
             topic=session.extracted_crop or "agronomy",
+            follow_up_question=getattr(safe_answer, "follow_up_question", None),
+            safety_note=getattr(safe_answer, "safety_note", None),
+            stt_provider=stt_provider_name,
+            llm_provider=getattr(raw_answer, "provider", "gemini"),
+            tts_provider=tts_provider_name,
+            fallback_used=stt_fallback_used or getattr(raw_answer, "provider", "") != "gemini",
             latency_ms=latencies,
             answer_en_gloss=safe_answer.english_gloss,
             user_transcript=user_text,
+            language=session.language,
         ),
     )

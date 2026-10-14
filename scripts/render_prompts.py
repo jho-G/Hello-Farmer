@@ -57,10 +57,47 @@ PROMPTS_SPEC = {
         "text": "ይቅርታ፣ የስርዓት መቆራረጥ አጋጥሟል። እባክዎ የአካባቢዎን የግብርና ባለሙያ ያማክሩ።",
     },
     # Afaan Oromo Prompts (Unified with Mekdes for consistent female persona)
+    # Location-Aware Conversation Prompts (Amharic)
+    "greeting_am.wav": {
+        "lang": "am",
+        "voice": "am-ET-MekdesNeural",
+        "text": "ሰላም፣ ወደ ሄሎ ፋርመር እንኳን ደህና መጡ። አገልግሎታችንን ለማሻሻል ይህ ጥሪ እየተቀዳ ነው። ከየትኛው ከተማ ወይም አካባቢ እየደወሉ ነው?",
+    },
+    "greeting_location_am.wav": {
+        "lang": "am",
+        "voice": "am-ET-MekdesNeural",
+        "text": "ሰላም፣ ወደ ሄሎ ፋርመር እንኳን ደህና መጡ። አገልግሎታችንን ለማሻሻል ይህ ጥሪ እየተቀዳ ነው። ከየትኛው ከተማ ወይም አካባቢ እየደወሉ ነው?",
+    },
+    "clarify_region_am.wav": {
+        "lang": "am",
+        "voice": "am-ET-MekdesNeural",
+        "text": "በየትኛው ክልል ውስጥ ነው?",
+    },
+    "ask_problem_am.wav": {
+        "lang": "am",
+        "voice": "am-ET-MekdesNeural",
+        "text": "አመሰግናለሁ። በሰብልዎ ወይም በእንስሳትዎ ላይ ምን ችግር አጋጥሟል? በራስዎ አነጋገር ይንገሩኝ።",
+    },
+    # Afaan Oromo Prompts (Unified with Mekdes for consistent female persona)
     "greeting_om.wav": {
         "lang": "om",
         "voice": "am-ET-MekdesNeural",
-        "text": "Baga gara gargaaraa qonnaa Heelo Faarmar nagaan dhuftan. Gaaffii keessan kallattiin dubbachuu dandeessu.",
+        "text": "Nagaa, baga gara Hello Farmer nagaan dhuftan. Tajaajila keenya fooyyessuuf wamichi kun waraabamaa jira. Magaalaa ykn naannoo kam irraa bilbilaa jirtu?",
+    },
+    "greeting_location_om.wav": {
+        "lang": "om",
+        "voice": "am-ET-MekdesNeural",
+        "text": "Nagaa, baga gara Hello Farmer nagaan dhuftan. Tajaajila keenya fooyyessuuf wamichi kun waraabamaa jira. Magaalaa ykn naannoo kam irraa bilbilaa jirtu?",
+    },
+    "clarify_region_om.wav": {
+        "lang": "om",
+        "voice": "am-ET-MekdesNeural",
+        "text": "Naannoo kam keessatti argama?",
+    },
+    "ask_problem_om.wav": {
+        "lang": "om",
+        "voice": "am-ET-MekdesNeural",
+        "text": "Galatoomaa. Midhaan ykn beellada keessan irratti maaltu ta'e? Jecha mataa keessaniin natti himaa.",
     },
     "consent_om.wav": {
         "lang": "om",
@@ -97,11 +134,57 @@ PROMPTS_SPEC = {
         "voice": "am-ET-MekdesNeural",
         "text": "Dhiifama, rakkoon teeknikaa mudateera. Maaloo ogeessa qonnaa naannoo keessanii gaafadhaa.",
     },
+    # English Prompts
+    "greeting_en.wav": {
+        "lang": "en",
+        "voice": "en-US-JennyNeural",
+        "text": "Hello, welcome to Hello Farmer. This call is being recorded to help us improve our service. Which town or nearby city are you calling from?",
+    },
+    "greeting_location_en.wav": {
+        "lang": "en",
+        "voice": "en-US-JennyNeural",
+        "text": "Hello, welcome to Hello Farmer. This call is being recorded to help us improve our service. Which town or nearby city are you calling from?",
+    },
+    "clarify_region_en.wav": {
+        "lang": "en",
+        "voice": "en-US-JennyNeural",
+        "text": "Which region is that in?",
+    },
+    "ask_problem_en.wav": {
+        "lang": "en",
+        "voice": "en-US-JennyNeural",
+        "text": "Thank you. What is happening with your crops or livestock? Please explain it in your own words.",
+    },
+    "low_confidence_en.wav": {
+        "lang": "en",
+        "voice": "en-US-JennyNeural",
+        "text": "Sorry, I could not hear you clearly. Please repeat your question.",
+    },
+    "repeat_prompt_en.wav": {
+        "lang": "en",
+        "voice": "en-US-JennyNeural",
+        "text": "Sorry, I could not hear you clearly. Please repeat your question.",
+    },
+    "safe_fallback_en.wav": {
+        "lang": "en",
+        "voice": "en-US-JennyNeural",
+        "text": "Sorry, there is no verified information available for this query. Please consult your local agricultural development agent or call eight zero two eight.",
+    },
+    "goodbye_en.wav": {
+        "lang": "en",
+        "voice": "en-US-JennyNeural",
+        "text": "Thank you for calling. Goodbye.",
+    },
+    "error_en.wav": {
+        "lang": "en",
+        "voice": "en-US-JennyNeural",
+        "text": "Sorry, a technical error occurred. Please consult your local extension agent.",
+    },
     # Bilingual Initial Greeting (Unified with Mekdes)
     "greeting_bilingual.wav": {
         "lang": "am",
         "voice": "am-ET-MekdesNeural",
-        "text": "እንኳን ወደ ሄሎ ፋርመር በደህና መጡ። Baga gara Heelo Faarmar nagaan dhuftan.",
+        "text": "ሰላም፣ ወደ ሄሎ ፋርመር እንኳን ደህና መጡ። Baga gara Heelo Faarmar nagaan dhuftan.",
     },
 }
 

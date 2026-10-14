@@ -399,6 +399,91 @@ The FastAPI backend exposes fully documented endpoints accessible at `http://loc
 
 ---
 
+## 🎙️ Location-Aware Voice Call Experience
+
+Hello Farmer delivers a voice-first conversational AI experience tailored for Ethiopian smallholder farmers. The agent answers the call, gives a brief service recording notice, resolves the farmer's location, retrieves evidence specific to that locality and agroecological zone, and responds with evidence-grounded agricultural advice.
+
+### Call Flow State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> GREETING: Farmer dials 8028
+    GREETING --> LOCATION_COLLECTION: Plays notice + location question (No yes/no prompt)
+    LOCATION_COLLECTION --> LOCATION_CLARIFICATION: Ambiguous place name (multi-region)
+    LOCATION_CLARIFICATION --> AGRICULTURAL_QUERY: Region clarified
+    LOCATION_COLLECTION --> AGRICULTURAL_QUERY: Resolved or general location
+    AGRICULTURAL_QUERY --> KNOWLEDGE_RETRIEVAL: Farmer explains crop/livestock issue
+    KNOWLEDGE_RETRIEVAL --> RESPONSE_GENERATION: Location-boosted pgvector + Open-Meteo
+    RESPONSE_GENERATION --> AGRICULTURAL_QUERY: Follow-up question
+    RESPONSE_GENERATION --> CLOSING: Goodbye or completion
+    CLOSING --> COMPLETED: Finalize DB & clean buffers
+    COMPLETED --> [*]
+```
+
+1. **GREETING**: The agent greets the caller and states the recording notice without asking for verbal yes/no permission, immediately asking for the town or nearby city:
+   - **English**: *"Hello, welcome to Hello Farmer. This call is being recorded to help us improve our service. Which town or nearby city are you calling from?"*
+   - **Amharic**: *"ሰላም፣ ወደ ሄሎ ፋርመር እንኳን ደህና መጡ። አገልግሎታችንን ለማሻሻል ይህ ጥሪ እየተቀዳ ነው። ከየትኛው ከተማ ወይም አካባቢ እየደወሉ ነው?"*
+   - **Afaan Oromo**: *"Nagaa, baga gara Hello Farmer nagaan dhuftan. Tajaajila keenya fooyyessuuf wamichi kun waraabamaa jira. Magaalaa ykn naannoo kam irraa bilbilaa jirtu?"*
+2. **LOCATION_COLLECTION**: Listens to the spoken place name, strips colloquial prefixes/suffixes (*"ከአዳማ ነው"*, *"በደብረ ብርሃን አካባቢ"*, *"Adaamaa irraa"*), and resolves to structured geography (town, woreda, zone, region, coordinates, agroecological zone).
+3. **LOCATION_CLARIFICATION**: If ambiguous, asks at most one concise clarification: *"Which region is that in?"* / *"በየትኛው ክልል ውስጥ ነው?"*.
+   > ⚠️ **Non-Default Guardrail**: Unknown locations are **never defaulted to Addis Ababa**. The agent proceeds with appropriately qualified general guidance.
+4. **AGRICULTURAL_QUERY**: Solicits the farmer's crop or livestock problem: *"Thank you. What is happening with your crops or livestock? Please explain it in your own words."* / *"አመሰግናለሁ። በሰብልዎ ወይም በእንስሳትዎ ላይ ምን ችግር አጋጥሟል? በራስዎ አነጋገር ይንገሩኝ።"*
+5. **KNOWLEDGE_RETRIEVAL**: Retrieves relevant knowledge chunks from PostgreSQL `pgvector` with geographic and agroecological boosts:
+   - Locality match (+0.20)
+   - Regional research center match (+0.12, e.g. EIAR Kulumsa, Melkassa, Bako, Adet, Debre Zeit)
+   - Agroecological zone match (+0.08, Dega/Highland, Weyna Dega/Midland, Kolla/Lowland)
+   - Verified national guidance (Tier 1/2) fallback
+   - Open-Meteo live weather forecast context for resolved coordinates
+6. **RESPONSE_GENERATION**: Grounded, concise (max 3 sentences) answer in spoken words, with numbers written phonetically for TTS clarity.
+7. **CLOSING**: Natural goodbye and session finalization.
+
+### Recording Policy & Privacy Architecture
+
+- `RECORDING_POLICY="transient_only"` (Default): Ephemeral 20ms VAD audio frames are streamed in-memory across the AudioSocket TCP bridge for speech recognition and immediately discarded. No raw caller voice audio is persisted to disk.
+- `RECORDING_POLICY="notice_based_persistent"`: Audio is stored only when explicitly configured, subject to `RECORDING_RETENTION_DAYS`.
+- Caller consent status is logged as `notice_announced` in the PostgreSQL `calls` table.
+
+---
+
+## 📞 Manual SIP Softphone Testing Guide (Linphone)
+
+You can place voice calls into Hello Farmer using **Linphone** (or any standard SIP softphone such as MicroSIP, Zoiper, or Telephone).
+
+### 1. Verify Docker Services Are Running
+```bash
+docker compose ps
+```
+Ensure `hello_farmer_backend` (port 9092 AudioSocket) and `hello_farmer_asterisk` (port 5060 SIP, ports 10000-10020 RTP) are healthy.
+
+### 2. Configure Linphone Account
+Open Linphone -> **Assistant** -> **Use a SIP Account**:
+| Setting | Value |
+|---|---|
+| **Display Name** | Caller 1001 |
+| **Username** | `1001` |
+| **SIP Domain / Proxy** | `127.0.0.1:5060` (or host LAN IP) |
+| **Password** | `FarmerPass1001!` |
+| **Transport** | `UDP` (or `TCP`) |
+
+*(Optional second account for test peer: Username `1002`, Password `FarmerPass1002!`)*
+
+### 3. Place Call to the National Agricultural Hotline
+In Linphone, dial:
+```text
+8028
+```
+*(Alternative test extensions: `8025`, `1001`, `100`)*
+
+### 4. Interactive Call Flow Progression
+1. **Hear Greeting**: The agent answers immediately and plays the recording notice and location question.
+2. **Speak Location**: Say *"Adama"* (or *"አዳማ"*, *"ናዝሬት"*, *"ደብረ ብርሃን"*, *"ሐዋሳ"*).
+3. **Hear Problem Prompt**: The agent acknowledges and asks about your crop or livestock problem.
+4. **Speak Problem**: Explain your crop problem (e.g., *"My wheat leaves have yellow powder spots"* or *"የስንዴ ቅጠሎች ቢጫ ዱቄት መሰል ነጠብጣብ አላቸው"*).
+5. **Receive Evidence-Grounded Answer**: The agent responds with locally relevant advice from Kulumsa/Debre Zeit research, including weather and spraying conditions.
+6. **End Call**: Say goodbye (*"ደህና ሁን"*, *"Nagaatti"*, or *"Goodbye"*) or hang up.
+
+---
+
 ## 🛡️ Agricultural Safety Guardrails
 
 Hello Farmer implements strict safety policies to protect smallholder livelihoods:

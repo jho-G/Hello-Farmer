@@ -142,7 +142,44 @@ This document records architectural, algorithmic, and engineering decisions made
   - Allows researchers, reviewers, and agronomists to evaluate AI answers, citations, and source tiers without placing telephony calls.
   - Developer SMS inbox makes mock SMS delivery inspectable without SMS gateways or carrier contracts.
 
+---
 
+## 17. Location-First Agricultural Voice Agent & Notice-Based Recording Architecture
+- **Decision**:
+  1. **Greeting & Recording Notice**: Play a single, natural spoken greeting that announces recording for service improvement and immediately asks for the caller's town or nearby city, with **NO verbal yes/no consent prompt** ("Do you agree", "say yes or no", or "ይፈቅዳሉ").
+  2. **Configurable Recording Policy**: Set `RECORDING_POLICY` (default `"transient_only"`, option `"notice_based_persistent"`). In transient mode, ephemeral 20ms VAD PCM frames are processed in-memory for transcription and immediately discarded without writing audio files to disk. Notice status is tracked in PostgreSQL `calls.recording_consent_status="notice_announced"`.
+  3. **Location Resolution & Prefix Cleaning**: Strip Ge'ez attached prepositions ("ከ", "በ") and conversational words ("ነው", "ነኝ", "አካባቢ", "irraa", "keessaa") before matching against 35+ reference Ethiopian hubs. Handle transliterations and historical aliases ("Nazret" -> Adama, "Debre Zeit" -> Bishoftu).
+  4. **Strict Ambiguity & Non-Defaulting Guardrail**: If multiple regions match, ask at most one concise clarification: "Which region is that in?" / "በየትኛው ክልል ውስጥ ነው?". If location resolution fails, **NEVER silently default to Addis Ababa**; proceed with appropriately qualified general guidance.
+  5. **Location-Aware pgvector RAG Boosting**: Knowledge retrieval applies tiered scoring boosts for locality match (+0.20), regional/zone research center match (+0.12, e.g. Kulumsa, Bako, Melkassa, Adet), and agroecological zone (+0.08, Dega/Weyna Dega/Kolla), while keeping national-level MoA guidance available as a fallback.
+  6. **Real-Time Weather Grounding**: When location coordinates are resolved, query Open-Meteo for local forecast, rain, and temperature to ground advice in immediate conditions.
+- **Rationale**:
+  - Smallholder farmers with limited digital literacy abandon calls when faced with complex consent menus or multi-step account registration.
+  - Agricultural recommendations differ significantly across Ethiopian agroecological zones (e.g., highland vertisols vs rift valley sandy loams). RAG evidence must be conditioned on true local research rather than cosmetic LLM prompt insertion.
+  - Discarding transient audio respects privacy by default while providing a documented, lawful notice.
 
+---
+
+## 18. Gemini-First Voice AI Architecture (STT, LLM Reasoning, TTS) & Location-Aware Grounding
+- **Decision**:
+  1. **Gemini as Primary STT (`gemini-3.5-transcribe` / `gemini-3.5-flash`)**:
+     - Implemented `GeminiSTTProvider` utilizing modern `google-genai` SDK with fallback to legacy `google.generativeai`.
+     - Built telephony audio normalization: 8 kHz / 16 kHz WAV normalization, volume leveling, silence gating (energy RMS < 0.003 or duration < 0.25s automatically returns empty transcript to protect API quota).
+     - Domain biasing prompt in authentic Amharic (Ethiopic Fidel) and Afaan Oromo (Latin Qubee).
+     - Free-tier protection & rate-limit handling: when Gemini encounters 429 `RESOURCE_EXHAUSTED` (3 RPM limit on free tier) or transient 503, it immediately delegates to configured fallback (`GroqSTTProvider` / `WhisperLocalSTTProvider`) without blocking the caller.
+  2. **Hybrid RAG + Location-Aware Answering Pipeline**:
+     - RAG remains the first source of truth for agronomic knowledge (Tiers 1-3 verified documents).
+     - When RAG evidence is sufficient (`evidence_mode="rag_grounded"`), Gemini formulates a concise 2-3 sentence answer strictly grounded in the retrieved passages.
+     - When RAG is insufficient or empty (`evidence_mode="location_aware_model_answer"`), Gemini generates a cautious, location-aware answer using the farmer's confirmed location (region, zone, woreda, agroecological zone), local weather context (Open-Meteo), and general agricultural best practices.
+     - Agronomic safety guardrails enforce that Gemini never invents pesticide/herbicide doses, application rates, or unverified fertilizer formulations, routing critical safety issues to local Development Agents (DA) or the 8028 hotline.
+  3. **Gemini as Primary TTS (`gemini-3.8-flash-tts`)**:
+     - Implemented `GeminiTTSProvider` generating natural speech with prebuilt expressive voice `"Kore"`.
+     - Real bandpass audio resampling: converts Gemini's 24 kHz 16-bit mono WAV into Asterisk's required 8 kHz 16-bit signed linear mono PCM via `audio_stream_to_pcm8k`.
+     - Seamless fallback to Edge-TTS (`am-ET-AmehaNeural` / `am-ET-MekdesNeural`) and Google TTS when quotas or connectivity limits occur.
+  4. **Latency & Observability**:
+     - Measured and tracked per-stage latencies (`stt`, `rag`, `llm`, `tts`, `total`).
+     - Exposed structured metadata (`evidence_mode`, `location_used`, `sources`, `providers`) in FastAPI endpoints and web interface without exposing sensitive API keys or SIP credentials.
+- **Rationale**:
+  - Delivers state-of-the-art multilingual voice quality for Ethiopian farmers with low latency.
+  - Keeps the entire system modular, resilient against network/quota disruptions, and free-tier compliant.
 
 

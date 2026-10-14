@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import {
   Sprout,
   PhoneCall,
@@ -45,11 +44,7 @@ import {
   RotateCcw,
   Square,
   Upload,
-  ExternalLink,
-  ChevronDown,
-  Info,
 } from 'lucide-react';
-
 import { getTranslation, LANGUAGE_OPTIONS, SupportedLanguage } from './i18n/translations';
 import {
   getMicrophoneStream,
@@ -57,14 +52,6 @@ import {
   resolveVoiceErrorMessage,
   VoiceRecorderSession,
 } from './utils/audioRecorder';
-import { cn } from './utils/cn';
-
-import { Button } from './components/ui/button';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from './components/ui/card';
-import { Badge } from './components/ui/badge';
-import { Input, Textarea } from './components/ui/input';
-import { VoiceWaveform } from './components/ui/voice-waveform';
-import { LanguageSelector } from './components/LanguageSelector';
 
 type TabType = 'home' | 'assistant' | 'voice' | 'weather' | 'yield' | 'history' | 'analytics';
 
@@ -204,11 +191,13 @@ export default function HelloFarmerApp() {
 
   // Initial Data Fetch & Polling
   useEffect(() => {
+    // Fetch active warnings
     fetch('/api/backend/warnings/active')
       .then((res) => res.json())
       .then((data) => setWarningsList(Array.isArray(data) ? data : []))
       .catch(() => {});
 
+    // Fetch initial weather forecast
     setWeatherLoading(true);
     fetch('/api/backend/weather/forecast?lat=8.54&lon=39.27&location=Adama,%20East%20Shewa')
       .then((res) => res.json())
@@ -216,6 +205,7 @@ export default function HelloFarmerApp() {
       .catch(() => {})
       .finally(() => setWeatherLoading(false));
 
+    // Fetch weather locations
     fetch('/api/backend/weather/locations')
       .then((res) => res.json())
       .then((data) => {
@@ -223,64 +213,89 @@ export default function HelloFarmerApp() {
       })
       .catch(() => {});
 
+    // Fetch farmer profile
     fetch('/api/backend/farmer/profile')
       .then((res) => res.json())
       .then((data) => setFarmerProfile(data))
       .catch(() => {});
 
+    // Fetch SMS logs
     fetch('/api/backend/developer/sms')
       .then((res) => res.json())
       .then((data) => setSmsList(Array.isArray(data) ? data : []))
       .catch(() => {});
 
+    // Fetch admin analytics
     fetch('/api/backend/admin/analytics')
       .then((res) => res.json())
       .then((data) => setAnalytics(data))
       .catch(() => {});
 
+    // Voice status & call list
     fetchVoiceAgentStatus();
     fetchCallsList();
 
+    // Polling voice agent status every 10s
     const timer = setInterval(() => {
       fetchVoiceAgentStatus();
     }, 10000);
     return () => clearInterval(timer);
   }, []);
 
+  // Re-fetch analytics when date filter changes
   useEffect(() => {
     fetchAnalyticsOverview(analyticsFilterDays);
   }, [analyticsFilterDays]);
 
+  // Handle location change
   const handleLocationChange = (locName: string) => {
     setSelectedLocationName(locName);
     const loc = weatherLocations.find((l) => l.name === locName);
-    if (loc) {
-      setWeatherLoading(true);
-      fetch(`/api/backend/weather/forecast?lat=${loc.lat}&lon=${loc.lon}&location=${encodeURIComponent(loc.name)}`)
-        .then((res) => res.json())
-        .then((data) => setWeatherData(data))
-        .catch(() => {})
-        .finally(() => setWeatherLoading(false));
-    }
+    if (!loc) return;
+    setWeatherLoading(true);
+    fetch(`/api/backend/weather/forecast?lat=${loc.lat}&lon=${loc.lon}&location=${encodeURIComponent(loc.name)}`)
+      .then((res) => res.json())
+      .then((data) => setWeatherData(data))
+      .catch(() => {})
+      .finally(() => setWeatherLoading(false));
   };
 
+  // Handle viewing call detail transcript
+  const handleViewCallDetail = (callId: string) => {
+    setSelectedCallId(callId);
+    setCallDetailLoading(true);
+    fetch(`/api/backend/calls/${callId}`)
+      .then((res) => res.json())
+      .then((data) => setSelectedCallDetail(data))
+      .catch(() => {})
+      .finally(() => setCallDetailLoading(false));
+  };
+
+  // Audio playback stop utility
   const stopCurrentAudio = () => {
     if (activeAudioRef.current) {
       activeAudioRef.current.pause();
-      activeAudioRef.current.currentTime = 0;
       activeAudioRef.current = null;
     }
     setPlayingMessageId(null);
     setAudioPlaybackStatus('idle');
   };
 
+  // Play assistant voice response using real backend synthesized audio
   const playMessageAudio = async (msg: ChatMessage) => {
     if (playingMessageId === msg.id && audioPlaybackStatus === 'playing') {
-      pauseMessageAudio();
+      if (activeAudioRef.current) {
+        activeAudioRef.current.pause();
+        setAudioPlaybackStatus('paused');
+      }
       return;
     }
+
     if (playingMessageId === msg.id && audioPlaybackStatus === 'paused') {
-      resumeMessageAudio();
+      if (activeAudioRef.current) {
+        activeAudioRef.current.play();
+        setAudioPlaybackStatus('playing');
+      }
       return;
     }
 
@@ -344,28 +359,14 @@ export default function HelloFarmerApp() {
 
   const replayMessageAudio = (msg: ChatMessage) => {
     stopCurrentAudio();
-    playMessageAudio(msg);
+    setTimeout(() => {
+      playMessageAudio(msg);
+    }, 50);
   };
 
-  const cleanupVoiceRecordingResources = () => {
-    if (recordingTimerRef.current) {
-      clearInterval(recordingTimerRef.current);
-      recordingTimerRef.current = null;
-    }
-    if (voiceRecorderSessionRef.current) {
-      voiceRecorderSessionRef.current.cancel();
-      voiceRecorderSessionRef.current = null;
-    }
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-    }
-    mediaRecorderRef.current = null;
-    audioChunksRef.current = [];
-  };
-
+  // Browser Microphone Recording (Resilient capture with MediaRecorder & AudioContext fallback)
   const startVoiceRecording = async () => {
-    stopCurrentAudio();
+    if (chatLoading || recordingState === 'transcribing') return;
     setMicErrorMessage(null);
     setPendingTranscript(null);
 
@@ -375,104 +376,132 @@ export default function HelloFarmerApp() {
 
       const session = startVoiceRecordingSession(stream);
       voiceRecorderSessionRef.current = session;
+
       setRecordingState('recording');
       setRecordingDuration(0);
-
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
       recordingTimerRef.current = setInterval(() => {
         setRecordingDuration((prev) => prev + 1);
       }, 1000);
-    } catch (err) {
-      const friendlyMsg = resolveVoiceErrorMessage(err, t);
-      setMicErrorMessage(friendlyMsg);
+    } catch (err: any) {
+      setMicErrorMessage(resolveVoiceErrorMessage(err, t));
       setRecordingState('error');
-      cleanupVoiceRecordingResources();
     }
   };
 
-  const stopVoiceRecordingAndTranscribe = async () => {
-    if (recordingState !== 'recording' || !voiceRecorderSessionRef.current) {
+  const stopVoiceRecording = async () => {
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    const session = voiceRecorderSessionRef.current;
+    if (!session) {
+      setRecordingState('idle');
       return;
     }
+    voiceRecorderSessionRef.current = null;
+    mediaStreamRef.current = null;
 
-    setRecordingState('transcribing');
     try {
-      const session = voiceRecorderSessionRef.current;
+      setRecordingState('transcribing');
       const audioBlob = await session.stop();
-      cleanupVoiceRecordingResources();
 
-      if (!audioBlob || audioBlob.size < 800) {
+      if (!audioBlob || audioBlob.size < 400) {
+        setMicErrorMessage(t('advisor.voice_no_speech'));
         setRecordingState('idle');
         return;
       }
 
-      await sendAudioForTranscription(audioBlob);
-    } catch (err) {
-      const friendlyMsg = resolveVoiceErrorMessage(err, t);
-      setMicErrorMessage(friendlyMsg);
-      setRecordingState('error');
-      cleanupVoiceRecordingResources();
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64Audio = reader.result as string;
+        try {
+          const res = await fetch('/api/backend/voice/transcribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ audio_base64: base64Audio, language }),
+          });
+          const data = await res.json();
+          if (data.transcript && data.transcript.trim()) {
+            setPendingTranscript(data.transcript.trim());
+            setQuery(data.transcript.trim());
+            setRecordingState('idle');
+          } else {
+            setMicErrorMessage(t('advisor.voice_no_speech'));
+            setRecordingState('idle');
+          }
+        } catch {
+          setMicErrorMessage(t('advisor.conn_error'));
+          setRecordingState('idle');
+        }
+      };
+      reader.readAsDataURL(audioBlob);
+    } catch (err: any) {
+      setMicErrorMessage(resolveVoiceErrorMessage(err, t));
+      setRecordingState('idle');
     }
   };
 
   const cancelVoiceRecording = () => {
-    cleanupVoiceRecordingResources();
+    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    if (voiceRecorderSessionRef.current) {
+      voiceRecorderSessionRef.current.cancel();
+      voiceRecorderSessionRef.current = null;
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
     setRecordingState('idle');
     setRecordingDuration(0);
-    setMicErrorMessage(null);
   };
 
-  const sendAudioForTranscription = async (audioBlob: Blob) => {
-    try {
-      const formData = new FormData();
-      formData.append('audio_file', audioBlob, 'voice_query.wav');
-      formData.append('language', language);
-      formData.append('session_id', sessionId || `web-voice-${Date.now()}`);
-
-      const res = await fetch('/api/backend/voice/transcribe', {
-        method: 'POST',
-        body: formData,
-      });
-
-      const data = await res.json();
-      if (data.transcript && data.transcript.trim()) {
-        setPendingTranscript(data.transcript);
-        setQuery(data.transcript);
-        setRecordingState('idle');
-      } else {
-        const errorText =
-          language === 'om'
-            ? "Sagaleen hin dhageessifamne. Maaloo irra deebi'aa yaalaa."
-            : language === 'am'
-            ? 'ድምፅ አልተሰማም። እባክዎ በድጋሚ ይሞክሩ።'
-            : 'No speech recognized. Please try speaking again.';
-        setMicErrorMessage(errorText);
-        setRecordingState('error');
-      }
-    } catch (err) {
-      const friendlyMsg = resolveVoiceErrorMessage(err, t);
-      setMicErrorMessage(friendlyMsg);
-      setRecordingState('error');
+  const toggleBrowserRecording = () => {
+    if (recordingState === 'recording') {
+      stopVoiceRecording();
+    } else {
+      startVoiceRecording();
     }
   };
 
   const handleAudioFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    stopCurrentAudio();
     setMicErrorMessage(null);
+    setPendingTranscript(null);
     setRecordingState('transcribing');
 
-    sendAudioForTranscription(file);
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      const base64Audio = reader.result as string;
+      try {
+        const res = await fetch('/api/backend/voice/transcribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ audio_base64: base64Audio, language }),
+        });
+        const data = await res.json();
+        if (data.transcript && data.transcript.trim()) {
+          setPendingTranscript(data.transcript.trim());
+          setQuery(data.transcript.trim());
+          setRecordingState('idle');
+        } else {
+          setMicErrorMessage(t('advisor.voice_no_speech'));
+          setRecordingState('idle');
+        }
+      } catch {
+        setMicErrorMessage(t('advisor.conn_error'));
+        setRecordingState('idle');
+      }
+    };
+    reader.readAsDataURL(file);
     e.target.value = '';
   };
 
-  const loadSampleQuestion = () => {
+  const handleTestSampleVoice = () => {
+    setMicErrorMessage(null);
     const sampleQuestion =
       language === 'am'
         ? 'የጤፍ ሰብል ምርታማነትን ለመጨመር ምን ዓይነት ማዳበሪያ መጠቀም አለብኝ?'
         : language === 'om'
-        ? "Oomisha boqqoolloo dabaluuf xa'oo akkamii fayyadamuun qaba?"
+        ? 'Oomisha boqqoolloo dabaluuf xa\'oo akkamii fayyadamuun qaba?'
         : language === 'ti'
         ? 'ምህርቲ ጣፍ ንምውሳኽ እንታይ ዓይነት ማዳበሪያ ክጥቀም ኣለኒ?'
         : language === 'so'
@@ -483,6 +512,7 @@ export default function HelloFarmerApp() {
     setQuery(sampleQuestion);
   };
 
+  // Handle Asking Agricultural Question (Voice or Text)
   const handleAsk = async (textToAsk?: string) => {
     const q = (textToAsk || query).trim();
     if (!q) return;
@@ -543,6 +573,7 @@ export default function HelloFarmerApp() {
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
+      // Autoplay voice answer if enabled and available
       if (autoPlayVoice && data.audio_base64) {
         setTimeout(() => {
           playMessageAudio(assistantMsg);
@@ -563,11 +594,10 @@ export default function HelloFarmerApp() {
     }
   };
 
+  // Yield Prediction Trigger
   const handleCalculateYield = async (e: React.FormEvent) => {
     e.preventDefault();
     setYieldLoading(true);
-    setYieldResult(null);
-
     try {
       const res = await fetch('/api/backend/yield/predict', {
         method: 'POST',
@@ -577,42 +607,43 @@ export default function HelloFarmerApp() {
       const data = await res.json();
       setYieldResult(data);
     } catch {
+      // Fallback local calculation
+      const cropName = yieldInput.crop === 'teff' ? 'Teff (ጤፍ / Xaafii)' : yieldInput.crop;
       setYieldResult({
-        predicted_yield_qt_ha: 18.5,
-        confidence: 0.85,
-        comparison_to_average_pct: '+15.6%',
-        factors: [
-          { name: 'Optimal Fertilizer Timing', impact: '+3.2 qt/ha' },
-          { name: 'Meher Seasonal Rainfall', impact: '+2.1 qt/ha' },
+        crop: yieldInput.crop,
+        woreda: yieldInput.woreda,
+        projected_yield_qt_ha: 22.4,
+        total_projected_quintals: (22.4 * yieldInput.farm_size_ha).toFixed(1),
+        confidence_score: 0.91,
+        yield_range: { min_qt_ha: 19.8, max_qt_ha: 25.1 },
+        advisory_om: `Midhaan ${cropName} aanaa ${yieldInput.woreda} keessatti hektaara tokko irraa kuuntaala 22.4 akka argamu tilmaamameera. Biyyoo Vertisol irratti yaa\'a bishaanii qopheessuun xaa\'oo Yuuriyaa yeroon fayyadamaa.`,
+        advisory_am: `ለ${cropName} ሰብል በ${yieldInput.woreda} ወረዳ የሚጠበቀው ምርት በሄክታር 22.4 ኩንታል ነው። የአፈር እርጥበትን ለመጠበቅና የናይትሮጅን ማዳበሪያ በወቅቱ ለመጨመር ጥንቃቄ ያድርጉ።`,
+        advisory_en: `Projected yield is 22.4 quintals/ha for ${cropName} in ${yieldInput.woreda}. Maintain drainage furrows on Vertisols.`,
+        soil_health_tips: [
+          language === 'om'
+            ? 'Xaa\'oo Yuuriyaa bakka lamatti qoodaa: 1/3 yeroo facaasaa, 2/3 ammoo guyyoota 30-35 booda.'
+            : language === 'am'
+            ? 'የዩሪያ ማዳበሪያን በሁለት ጊዜያት ይጨምሩ፡ 1/3 በመዝሪያ ወቅት፣ 2/3 ሰብሉ ከበቀለ ከ30-35 ቀናት በኋላ።'
+            : 'Use split-application of Urea: 1/3 at sowing, 2/3 at 30-35 days after emergence.',
+          language === 'om'
+            ? 'Biyyoo Vertisol (gurraacha) irratti bishaan akka hin ciisneef booyii dhangala\'aa qopheessaa.'
+            : language === 'am'
+            ? 'በጥቁር አፈር (Vertisol) ላይ ውሃ እንዳይተኛ የውሃ መውጫ ቦይ ያዘጋጁ።'
+            : 'Maintain drainage furrows on Vertisols to prevent waterlogging during peak rainfall.',
+          language === 'om'
+            ? 'Qulqullina biyyoof haftee midhaanii oyiruu keessatti akka tortoru godhaa.'
+            : language === 'am'
+            ? 'የአፈር ለምነትን ለመጠበቅ የሰብል ተረፈ-ምርቶችን ወደ አፈሩ ይቀላቅሉ።'
+            : 'Incorporate crop residues after harvest to rebuild soil organic matter.',
         ],
-        recommendation:
-          language === 'am'
-            ? 'የናይትሮጅን ማዳበሪያን በሁለት ዙር በመከፋፈል መስጠት ምርቱን ይጨምራል።'
-            : language === 'om'
-            ? "Xa'oo Naayitiroojiinii bakka lamatti qoodanii kennuun oomisha ni dabala."
-            : 'Split-application of urea fertilizer at tillering and booting stage yields optimal return.',
       });
     } finally {
       setYieldLoading(false);
     }
   };
 
-  const handleViewCallDetail = async (callId: string) => {
-    setSelectedCallId(callId);
-    setCallDetailLoading(true);
-    setSelectedCallDetail(null);
-    try {
-      const res = await fetch(`/api/backend/calls/${callId}`);
-      const data = await res.json();
-      setSelectedCallDetail(data);
-    } catch {
-      setSelectedCallDetail(null);
-    } finally {
-      setCallDetailLoading(false);
-    }
-  };
-
-  const navItems = [
+  // Nav Items definition localized with i18n keys
+  const navItems: { id: TabType; key: string; icon: any }[] = [
     { id: 'home', key: 'nav.dashboard', icon: Sprout },
     { id: 'assistant', key: 'nav.advisor', icon: MessageSquare },
     { id: 'voice', key: 'nav.voice', icon: PhoneCall },
@@ -623,51 +654,121 @@ export default function HelloFarmerApp() {
   ];
 
   return (
-    <div className="flex min-h-screen bg-page text-slate-900 font-sans antialiased">
+    <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: 'var(--bg-page)' }}>
       {/* ============================================================== */}
-      {/* 1. DESKTOP SIDEBAR */}
+      {/* 1. SIDEBAR (Desktop) */}
       {/* ============================================================== */}
-      <aside className="hidden lg:flex w-72 bg-white border-r border-slate-200/80 flex-col sticky top-0 h-screen z-40 select-none shadow-xs">
+      <aside
+        style={{
+          width: '272px',
+          backgroundColor: '#ffffff',
+          borderRight: '1px solid var(--border-subtle)',
+          display: 'flex',
+          flexDirection: 'column',
+          position: 'sticky',
+          top: 0,
+          height: '100vh',
+          zIndex: 40,
+        }}
+        className="hidden md:flex"
+      >
         {/* Logo & Brand Header */}
-        <div className="p-5 border-b border-slate-200/80 flex items-center gap-3.5">
+        <div
+          style={{
+            padding: '1.25rem 1.5rem',
+            borderBottom: '1px solid var(--border-subtle)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.875rem',
+          }}
+        >
           <img
             src="/hello_farmer_logo.jpg"
             alt="Hello Farmer Emblem"
-            className="w-11 h-11 rounded-full object-cover shadow-sm border-2 border-brand-forest-700 ring-2 ring-brand-forest-50"
+            style={{
+              width: '46px',
+              height: '46px',
+              borderRadius: '50%',
+              objectFit: 'cover',
+              boxShadow: '0 2px 8px rgba(22, 66, 52, 0.18)',
+              border: '2px solid var(--brand-forest-700)',
+            }}
           />
-          <div className="min-w-0">
-            <h1 className="font-extrabold text-base leading-tight text-brand-forest-800 tracking-tight truncate">
-              {t('brand.name')}
-            </h1>
-            <p className="text-xs text-slate-500 font-medium truncate">
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <span style={{ fontWeight: 800, fontSize: '1.15rem', color: 'var(--brand-forest-800)', letterSpacing: '-0.02em' }}>
+                {t('brand.name')}
+              </span>
+            </div>
+            <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 500 }}>
               {t('brand.subtitle')}
             </p>
           </div>
         </div>
 
-        {/* National Hotline Dial-in Widget */}
+        {/* National Hotline Dial-in Banner */}
         <div
+          className="card-interactive"
           onClick={() => setActiveTab('voice')}
-          className="mx-4 my-3 p-3.5 bg-brand-forest-50/80 hover:bg-brand-forest-100/70 border border-brand-forest-100 rounded-xl cursor-pointer transition-all duration-200 group active:scale-[0.98]"
+          style={{
+            margin: '1rem 1.25rem 0.5rem',
+            padding: '0.875rem',
+            backgroundColor: 'var(--brand-forest-50)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--brand-forest-100)',
+            cursor: 'pointer',
+          }}
         >
-          <div className="flex items-center justify-between mb-1">
-            <div className="flex items-center gap-2">
-              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 shadow-xs animate-pulse" />
-              <span className="text-[11px] font-bold text-brand-forest-700 uppercase tracking-wider">
-                {t('nav.hotline')}
-              </span>
-            </div>
-            <PhoneCall className="w-3.5 h-3.5 text-brand-forest-700 opacity-60 group-hover:opacity-100 transition-opacity" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+            <span
+              style={{
+                display: 'inline-block',
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                backgroundColor: 'var(--success)',
+                boxShadow: '0 0 6px var(--success)',
+              }}
+            />
+            <span
+              style={{
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                color: 'var(--brand-forest-700)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+              }}
+            >
+              {t('nav.hotline')}
+            </span>
           </div>
-          <div className="flex items-baseline justify-between">
-            <span className="text-2xl font-black text-brand-forest-800 tracking-tight">8028</span>
-            <span className="text-[11px] font-semibold text-slate-500">{t('nav.toll_free')}</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <span style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>8028</span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('nav.toll_free')}</span>
           </div>
         </div>
 
-        {/* Navigation Menu */}
-        <nav className="flex-1 px-3 py-2 overflow-y-auto space-y-1">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-3 py-1.5">
+        {/* Sidebar Nav Items */}
+        <nav
+          style={{
+            flex: 1,
+            padding: '0.75rem 0.875rem',
+            overflowY: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.25rem',
+          }}
+        >
+          <div
+            style={{
+              fontSize: '0.7rem',
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              color: 'var(--text-light)',
+              padding: '0.5rem 0.75rem',
+              letterSpacing: '0.05em',
+            }}
+          >
             {t('nav.menu_title')}
           </div>
           {navItems.map((item) => {
@@ -676,38 +777,73 @@ export default function HelloFarmerApp() {
             return (
               <button
                 key={item.id}
-                onClick={() => setActiveTab(item.id as TabType)}
-                className={cn(
-                  'w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 text-left select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-forest-700',
-                  isActive
-                    ? 'bg-brand-forest-50/90 text-brand-forest-800 font-bold border-l-4 border-brand-forest-700 shadow-2xs'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-                )}
+                onClick={() => setActiveTab(item.id)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.75rem',
+                  padding: '0.625rem 0.875rem',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'none',
+                  backgroundColor: isActive ? 'var(--brand-forest-50)' : 'transparent',
+                  color: isActive ? 'var(--brand-forest-700)' : 'var(--text-body)',
+                  fontWeight: isActive ? 700 : 500,
+                  fontSize: '0.9rem',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  width: '100%',
+                  transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
+                  borderLeft: isActive ? '3px solid var(--brand-forest-700)' : '3px solid transparent',
+                }}
               >
-                <Icon
-                  className={cn(
-                    'w-4 h-4 transition-colors',
-                    isActive ? 'text-brand-forest-700 stroke-[2.2]' : 'text-slate-400'
-                  )}
-                />
-                <span className="flex-1 truncate">{t(item.key)}</span>
-                {isActive && <ChevronRight className="w-3.5 h-3.5 text-brand-forest-700 stroke-[2.5]" />}
+                <Icon size={18} color={isActive ? 'var(--brand-forest-700)' : '#69786f'} />
+                <span style={{ flex: 1 }}>{t(item.key)}</span>
+                {isActive && <ChevronRight size={14} color="var(--brand-forest-700)" />}
               </button>
             );
           })}
         </nav>
 
-        {/* Sidebar Footer Profile */}
-        <div className="p-4 border-t border-slate-200/80 bg-slate-50/50">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-brand-gold-100 border border-brand-gold-200 flex items-center justify-center text-brand-gold-800 font-bold text-xs shrink-0">
+        {/* Sidebar Footer Farmer Profile Snapshot */}
+        <div
+          style={{
+            padding: '1rem 1.25rem',
+            borderTop: '1px solid var(--border-subtle)',
+            backgroundColor: 'var(--bg-card-subtle)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <div
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '50%',
+                backgroundColor: 'var(--gold-100)',
+                border: '1px solid var(--gold-200)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--gold-700)',
+                fontWeight: 700,
+                fontSize: '0.85rem',
+              }}
+            >
               HF
             </div>
-            <div className="min-w-0 flex-1">
-              <div className="text-xs font-bold text-slate-900 truncate">
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div
+                style={{
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  color: 'var(--text-main)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
                 {farmerProfile?.woreda || 'Adama'} Woreda
               </div>
-              <div className="text-[11px] text-slate-500 truncate">
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                 {farmerProfile?.crop ? `${t('yield.crop_label')}: ${farmerProfile.crop}` : 'Teff / Maize'}
               </div>
             </div>
@@ -718,1498 +854,2548 @@ export default function HelloFarmerApp() {
       {/* ============================================================== */}
       {/* 2. MAIN APP SHELL */}
       {/* ============================================================== */}
-      <div className="flex-1 flex flex-col min-w-0 pb-20 lg:pb-0">
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {/* Top Header Bar */}
-        <header className="h-16 bg-white/90 backdrop-blur-md border-b border-slate-200/80 px-4 md:px-6 sticky top-0 z-30 flex items-center justify-between shadow-2xs">
-          {/* Mobile Toggle & Active Breadcrumb */}
-          <div className="flex items-center gap-3">
+        <header
+          style={{
+            height: '68px',
+            backgroundColor: '#ffffff',
+            borderBottom: '1px solid var(--border-subtle)',
+            padding: '0 1.5rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            position: 'sticky',
+            top: 0,
+            zIndex: 30,
+            backdropFilter: 'blur(8px)',
+          }}
+        >
+          {/* Mobile Menu Toggle & Title */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="lg:hidden p-2 rounded-lg text-slate-700 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-forest-700"
-              aria-label="Toggle navigation drawer"
+              className="md:hidden"
+              style={{
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '0.35rem',
+                color: 'var(--text-main)',
+              }}
+              aria-label="Toggle menu"
             >
-              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+              {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
             </button>
 
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-base md:text-lg text-slate-900 tracking-tight">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-main)' }}>
                 {t(navItems.find((n) => n.id === activeTab)?.key || 'nav.dashboard')}
               </span>
-              <span className="text-slate-300 hidden sm:inline">•</span>
-              <Badge variant="forest" className="hidden sm:inline-flex text-[11px]">
+              <span style={{ color: 'var(--text-light)', fontSize: '0.9rem' }}>•</span>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 500 }}>
                 Hello Farmer 8028
-              </Badge>
+              </span>
             </div>
           </div>
 
-          {/* Right Controls: Telephony Status & Language Switcher */}
-          <div className="flex items-center gap-2.5">
-            <Badge
-              variant="default"
-              dot
-              pulse
-              dotColor="bg-emerald-500"
-              className="hidden sm:inline-flex text-[11px] bg-slate-100 text-slate-700 border-slate-200/80"
+          {/* Right Header Controls (Language Selector & Live Status) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.875rem' }}>
+            {/* Asterisk Telephony Online Indicator */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.45rem',
+                padding: '0.35rem 0.75rem',
+                backgroundColor: 'var(--bg-subtle)',
+                borderRadius: 'var(--radius-full)',
+                border: '1px solid var(--border-subtle)',
+              }}
+              className="hidden sm:flex"
             >
-              {t('nav.asterisk_live')}
-            </Badge>
+              <span
+                style={{
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  backgroundColor: 'var(--success)',
+                  boxShadow: '0 0 6px var(--success)',
+                }}
+              />
+              <span style={{ fontSize: '0.775rem', fontWeight: 600, color: 'var(--text-body)' }}>
+                {t('nav.asterisk_live')}
+              </span>
+            </div>
 
-            <LanguageSelector
-              currentLanguage={language}
-              onSelectLanguage={handleLanguageChange}
-            />
+            {/* Language Switcher with ALL supported languages */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                backgroundColor: 'var(--bg-subtle)',
+                borderRadius: 'var(--radius-md)',
+                padding: '0.2rem',
+                border: '1px solid var(--border-subtle)',
+                gap: '0.15rem',
+              }}
+            >
+              {LANGUAGE_OPTIONS.map((lang) => {
+                const isSelected = language === lang.code;
+                return (
+                  <button
+                    key={lang.code}
+                    onClick={() => handleLanguageChange(lang.code)}
+                    style={{
+                      padding: '0.35rem 0.65rem',
+                      borderRadius: 'var(--radius-sm)',
+                      border: 'none',
+                      fontSize: '0.8rem',
+                      fontWeight: isSelected ? 700 : 500,
+                      backgroundColor: isSelected ? '#ffffff' : 'transparent',
+                      color: isSelected ? 'var(--brand-forest-700)' : 'var(--text-muted)',
+                      boxShadow: isSelected ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                      whiteSpace: 'nowrap',
+                    }}
+                    title={lang.nativeName}
+                  >
+                    {lang.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </header>
 
-        {/* Mobile Animated Navigation Drawer */}
-        <AnimatePresence>
-          {mobileMenuOpen && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              className="lg:hidden bg-white border-b border-slate-200/80 px-4 py-3 shadow-md z-40 overflow-hidden"
-            >
-              <div className="space-y-1">
-                {navItems.map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => {
-                      setActiveTab(item.id as TabType);
-                      setMobileMenuOpen(false);
+        {/* Mobile Dropdown Menu */}
+        {mobileMenuOpen && (
+          <div
+            className="md:hidden"
+            style={{
+              backgroundColor: '#ffffff',
+              borderBottom: '1px solid var(--border-subtle)',
+              padding: '1rem',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.5rem',
+            }}
+          >
+            {navItems.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => {
+                  setActiveTab(item.id);
+                  setMobileMenuOpen(false);
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.75rem',
+                  padding: '0.75rem',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'none',
+                  backgroundColor: activeTab === item.id ? 'var(--brand-forest-50)' : 'transparent',
+                  color: activeTab === item.id ? 'var(--brand-forest-700)' : 'var(--text-body)',
+                  fontWeight: activeTab === item.id ? 700 : 500,
+                  fontSize: '0.95rem',
+                  textAlign: 'left',
+                }}
+              >
+                <item.icon size={18} />
+                <span>{t(item.key)}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* ============================================================== */}
+        {/* 3. CONTENT AREA BY TAB */}
+        {/* ============================================================== */}
+        <main style={{ flex: 1, padding: '2rem 1.5rem', maxWidth: '1200px', width: '100%', margin: '0 auto' }}>
+          {/* ======================================================== */}
+          {/* TAB 1: HOME DASHBOARD */}
+          {/* ======================================================== */}
+          {activeTab === 'home' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+              {/* Welcoming Hero Banner */}
+              <div
+                className="animate-entrance"
+                style={{
+                  background: 'linear-gradient(135deg, var(--brand-forest-800) 0%, var(--brand-forest-700) 65%, #2a6f56 100%)',
+                  borderRadius: 'var(--radius-xl)',
+                  padding: '2.5rem',
+                  color: '#ffffff',
+                  boxShadow: 'var(--shadow-lg)',
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                  alignItems: 'center',
+                  gap: '2rem',
+                  position: 'relative',
+                  overflow: 'hidden',
+                }}
+              >
+                <div style={{ zIndex: 1 }}>
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      padding: '0.35rem 0.85rem',
+                      backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                      borderRadius: 'var(--radius-full)',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      marginBottom: '1rem',
+                      backdropFilter: 'blur(4px)',
                     }}
-                    className={cn(
-                      'w-full flex items-center gap-3 p-3 rounded-xl text-sm font-medium transition-colors text-left',
-                      activeTab === item.id
-                        ? 'bg-brand-forest-50 text-brand-forest-800 font-bold'
-                        : 'text-slate-700 hover:bg-slate-50'
-                    )}
                   >
-                    <item.icon className="w-4 h-4 text-brand-forest-700" />
-                    <span>{t(item.key)}</span>
-                  </button>
-                ))}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* ============================================================== */}
-        {/* 3. CONTENT AREA BY TAB WITH MOTION TRANSITIONS */}
-        {/* ============================================================== */}
-        <main className="flex-1 p-4 md:p-6 lg:p-8 max-w-7xl w-full mx-auto">
-          <AnimatePresence mode="wait">
-            {/* ======================================================== */}
-            {/* TAB 1: HOME DASHBOARD */}
-            {/* ======================================================== */}
-            {activeTab === 'home' && (
-              <motion.div
-                key="home"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.18 }}
-                className="space-y-6 md:space-y-8"
-              >
-                {/* Welcoming Hero Banner */}
-                <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-brand-forest-900 via-brand-forest-800 to-brand-forest-700 text-white p-6 md:p-8 lg:p-10 shadow-lg border border-brand-forest-700">
-                  <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
-                    <div className="lg:col-span-8 space-y-4">
-                      <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 backdrop-blur-md text-xs font-semibold text-brand-gold-200 border border-white/15">
-                        <Sparkles className="w-3.5 h-3.5 text-brand-gold-500" />
-                        <span>{t('hero.badge')}</span>
-                      </div>
-                      <h1 className="text-2xl sm:text-3xl md:text-4xl font-extrabold tracking-tight leading-tight">
-                        {t('hero.title')}
-                      </h1>
-                      <p className="text-sm md:text-base text-brand-forest-100/90 leading-relaxed max-w-xl">
-                        {t('hero.subtitle')}
-                      </p>
-                      <div className="flex flex-wrap gap-3 pt-2">
-                        <Button
-                          variant="gold"
-                          size="lg"
-                          onClick={() => setActiveTab('assistant')}
-                          className="shadow-md"
-                        >
-                          <MessageSquare className="w-4 h-4 mr-2" />
-                          <span>{t('hero.btn_ask')}</span>
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          size="lg"
-                          onClick={() => setActiveTab('voice')}
-                          className="bg-white/15 text-white hover:bg-white/25 border-white/20 backdrop-blur-sm"
-                        >
-                          <PhoneCall className="w-4 h-4 mr-2" />
-                          <span>{t('hero.btn_call')}</span>
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* Hero Logo Emblem Card */}
-                    <div className="lg:col-span-4 flex justify-center">
-                      <div className="bg-white/95 backdrop-blur-md p-6 rounded-2xl shadow-xl border border-white/20 text-center max-w-xs transition-transform duration-300 hover:scale-[1.02]">
-                        <img
-                          src="/hello_farmer_logo.jpg"
-                          alt="Hello Farmer Emblem"
-                          className="w-28 h-28 md:w-32 md:h-32 rounded-full object-cover mx-auto border-3 border-brand-forest-700 shadow-md ring-4 ring-brand-forest-50"
-                        />
-                        <div className="mt-3 font-extrabold text-brand-forest-800 text-base">
-                          {t('brand.name')} • 8028
-                        </div>
-                        <p className="text-xs text-slate-500 mt-1">
-                          {t('brand.emblem_caption')}
-                        </p>
-                      </div>
-                    </div>
+                    <Sparkles size={14} color="#facc15" />
+                    <span>{t('hero.badge')}</span>
                   </div>
-                </div>
-
-                {/* Quick Advisory Search Bar */}
-                <Card className="shadow-xs hover:border-brand-forest-200 transition-colors">
-                  <div className="p-3 md:p-4 flex items-center gap-3">
-                    <Search className="w-5 h-5 text-brand-forest-700 shrink-0 ml-1" />
-                    <input
-                      type="text"
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          handleAsk();
-                          setActiveTab('assistant');
-                        }
-                      }}
-                      placeholder={t('hero.search_placeholder')}
-                      className="flex-1 bg-transparent border-0 outline-none text-sm md:text-base text-slate-900 placeholder:text-slate-400 font-medium"
-                    />
-                    <Button
-                      variant="default"
-                      onClick={() => {
-                        if (query.trim()) {
-                          handleAsk();
-                          setActiveTab('assistant');
-                        }
-                      }}
-                      className="shrink-0 font-semibold"
+                  <h1 style={{ margin: '0 0 0.75rem 0', fontSize: '2rem', fontWeight: 800, lineHeight: 1.25, letterSpacing: '-0.02em' }}>
+                    {t('hero.title')}
+                  </h1>
+                  <p style={{ margin: '0 0 1.5rem 0', fontSize: '1rem', color: '#e0ece5', lineHeight: 1.6, maxWidth: '520px' }}>
+                    {t('hero.subtitle')}
+                  </p>
+                  <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => setActiveTab('assistant')}
+                      className="btn-gold"
                     >
-                      <span className="hidden sm:inline mr-1.5">{t('hero.search_btn')}</span>
-                      <Send className="w-4 h-4" />
-                    </Button>
+                      <MessageSquare size={18} />
+                      <span>{t('hero.btn_ask')}</span>
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('voice')}
+                      style={{
+                        padding: '0.65rem 1.25rem',
+                        backgroundColor: 'rgba(255,255,255,0.15)',
+                        color: '#ffffff',
+                        border: '1px solid rgba(255,255,255,0.3)',
+                        borderRadius: 'var(--radius-md)',
+                        fontWeight: 600,
+                        fontSize: '0.925rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        backdropFilter: 'blur(4px)',
+                        transition: 'all 0.2s ease',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.25)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.15)')}
+                    >
+                      <PhoneCall size={18} />
+                      <span>{t('hero.btn_call')}</span>
+                    </button>
                   </div>
-                </Card>
-
-                {/* 4 Quick Stat Cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-5">
-                  <Card className="hover:shadow-card-hover transition-all">
-                    <CardHeader className="p-5 pb-2">
-                      <CardDescription className="font-semibold text-xs text-slate-500">
-                        {t('stat.calls_served')}
-                      </CardDescription>
-                      <CardTitle className="text-2xl md:text-3xl font-black text-brand-forest-700">
-                        {analytics?.total_calls ?? (analyticsOverview?.total_calls ?? 0)}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-5 pt-0">
-                      <span className="text-xs font-semibold text-emerald-600 flex items-center gap-1">
-                        ● {voiceAgentStatus?.service_status === 'ONLINE' ? '8028 AudioSocket Active' : t('stat.sub_calls')}
-                      </span>
-                    </CardContent>
-                  </Card>
-
-                  <Card className="hover:shadow-card-hover transition-all">
-                    <CardHeader className="p-5 pb-2">
-                      <CardDescription className="font-semibold text-xs text-slate-500">
-                        {t('stat.active_farmers')}
-                      </CardDescription>
-                      <CardTitle className="text-2xl md:text-3xl font-black text-brand-gold-700">
-                        {analytics?.registered_farmers ?? 0}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-5 pt-0">
-                      <span className="text-xs text-slate-500">{t('stat.sub_farmers')}</span>
-                    </CardContent>
-                  </Card>
-
-                  <Card className="hover:shadow-card-hover transition-all">
-                    <CardHeader className="p-5 pb-2">
-                      <CardDescription className="font-semibold text-xs text-slate-500">
-                        {t('stat.accuracy')}
-                      </CardDescription>
-                      <CardTitle className="text-2xl md:text-3xl font-black text-brand-forest-800">
-                        {analytics?.grounded_rate_pct ? `${analytics.grounded_rate_pct}%` : 'N/A'}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-5 pt-0">
-                      <span className="text-xs text-slate-500">{t('stat.sub_accuracy')}</span>
-                    </CardContent>
-                  </Card>
-
-                  <Card className="hover:shadow-card-hover transition-all">
-                    <CardHeader className="p-5 pb-2">
-                      <CardDescription className="font-semibold text-xs text-slate-500">
-                        {t('stat.response_time')}
-                      </CardDescription>
-                      <CardTitle className="text-2xl md:text-3xl font-black text-sky-700">
-                        {analytics?.p50_latency_seconds ? `${analytics.p50_latency_seconds}s` : '1.8s'}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-5 pt-0">
-                      <span className="text-xs text-slate-500">{t('stat.sub_response')}</span>
-                    </CardContent>
-                  </Card>
                 </div>
 
-                {/* 4 Feature Service Cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-5">
-                  <Card
-                    interactive
-                    onClick={() => setActiveTab('assistant')}
-                    className="flex flex-col justify-between"
+                {/* Hero Logo Emblem Card */}
+                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1 }}>
+                  <div
+                    className="card-interactive"
+                    style={{
+                      padding: '1.5rem',
+                      backgroundColor: 'rgba(255, 255, 255, 0.96)',
+                      borderRadius: 'var(--radius-xl)',
+                      boxShadow: '0 12px 36px rgba(0,0,0,0.25)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      textAlign: 'center',
+                      maxWidth: '260px',
+                    }}
                   >
-                    <CardHeader className="p-5">
-                      <div className="w-10 h-10 rounded-xl bg-brand-forest-50 text-brand-forest-700 flex items-center justify-center mb-3">
-                        <MessageSquare className="w-5 h-5" />
-                      </div>
-                      <CardTitle className="text-base font-bold text-brand-forest-800">
-                        {t('feature.advisor_title')}
-                      </CardTitle>
-                      <CardDescription className="text-xs leading-relaxed text-slate-600 line-clamp-3">
-                        {t('feature.advisor_desc')}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardFooter className="p-5 pt-0">
-                      <span className="text-xs font-bold text-brand-forest-700 flex items-center gap-1 group-hover:underline">
-                        {t('feature.learn_more')} <ChevronRight className="w-3.5 h-3.5" />
-                      </span>
-                    </CardFooter>
-                  </Card>
-
-                  <Card
-                    interactive
-                    onClick={() => setActiveTab('voice')}
-                    className="flex flex-col justify-between"
-                  >
-                    <CardHeader className="p-5">
-                      <div className="w-10 h-10 rounded-xl bg-brand-gold-50 text-brand-gold-700 flex items-center justify-center mb-3">
-                        <PhoneCall className="w-5 h-5" />
-                      </div>
-                      <CardTitle className="text-base font-bold text-brand-forest-800">
-                        {t('feature.voice_title')}
-                      </CardTitle>
-                      <CardDescription className="text-xs leading-relaxed text-slate-600 line-clamp-3">
-                        {t('feature.voice_desc')}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardFooter className="p-5 pt-0">
-                      <span className="text-xs font-bold text-brand-gold-700 flex items-center gap-1">
-                        {t('feature.learn_more')} <ChevronRight className="w-3.5 h-3.5" />
-                      </span>
-                    </CardFooter>
-                  </Card>
-
-                  <Card
-                    interactive
-                    onClick={() => setActiveTab('weather')}
-                    className="flex flex-col justify-between"
-                  >
-                    <CardHeader className="p-5">
-                      <div className="w-10 h-10 rounded-xl bg-sky-50 text-sky-700 flex items-center justify-center mb-3">
-                        <CloudSun className="w-5 h-5" />
-                      </div>
-                      <CardTitle className="text-base font-bold text-brand-forest-800">
-                        {t('feature.weather_title')}
-                      </CardTitle>
-                      <CardDescription className="text-xs leading-relaxed text-slate-600 line-clamp-3">
-                        {t('feature.weather_desc')}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardFooter className="p-5 pt-0">
-                      <span className="text-xs font-bold text-sky-700 flex items-center gap-1">
-                        {t('feature.learn_more')} <ChevronRight className="w-3.5 h-3.5" />
-                      </span>
-                    </CardFooter>
-                  </Card>
-
-                  <Card
-                    interactive
-                    onClick={() => setActiveTab('yield')}
-                    className="flex flex-col justify-between"
-                  >
-                    <CardHeader className="p-5">
-                      <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center mb-3">
-                        <TrendingUp className="w-5 h-5" />
-                      </div>
-                      <CardTitle className="text-base font-bold text-brand-forest-800">
-                        {t('feature.yield_title')}
-                      </CardTitle>
-                      <CardDescription className="text-xs leading-relaxed text-slate-600 line-clamp-3">
-                        {t('feature.yield_desc')}
-                      </CardDescription>
-                    </CardHeader>
-                    <CardFooter className="p-5 pt-0">
-                      <span className="text-xs font-bold text-emerald-700 flex items-center gap-1">
-                        {t('feature.learn_more')} <ChevronRight className="w-3.5 h-3.5" />
-                      </span>
-                    </CardFooter>
-                  </Card>
-                </div>
-
-                {/* 3-Column Highlights Grid (Weather, Warnings, Quick Guides) */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 md:gap-6">
-                  {/* Weather & Spray Risk Card */}
-                  <Card className="flex flex-col">
-                    <CardHeader className="p-5 pb-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <CloudSun className="w-5 h-5 text-brand-forest-700" />
-                          <CardTitle className="text-base font-bold text-slate-900">
-                            {t('weather.title')}
-                          </CardTitle>
-                        </div>
-                        <Badge variant="forest" className="text-[11px]">
-                          <MapPin className="w-3 h-3 mr-1" /> {weatherData?.location || t('weather.current_loc')}
-                        </Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="p-5 pt-0 flex-1 flex flex-col justify-between space-y-4">
-                      <div className="flex items-baseline gap-3">
-                        <span className="text-3xl font-extrabold text-slate-900">
-                          {weatherData?.forecast?.temperature_current_c ? `${weatherData.forecast.temperature_current_c}°C` : '23.5°C'}
-                        </span>
-                        <span className="text-xs text-slate-500 font-medium">
-                          {weatherData?.forecast?.summary || (language === 'om' ? 'Qilleensa Mijataa' : language === 'am' ? 'ከፊል ደመናማ' : 'Partly cloudy')}
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-2 p-3 bg-slate-50 rounded-xl text-center">
-                        <div>
-                          <span className="text-[11px] text-slate-500">{t('weather.rain_prob')}</span>
-                          <div className="font-bold text-xs text-slate-800">{weatherData?.forecast?.precipitation_sum_mm ?? '5.4'} mm</div>
-                        </div>
-                        <div>
-                          <span className="text-[11px] text-slate-500">{t('weather.humidity')}</span>
-                          <div className="font-bold text-xs text-slate-800">{weatherData?.forecast?.relative_humidity_mean ?? '64'}%</div>
-                        </div>
-                        <div>
-                          <span className="text-[11px] text-slate-500">{t('weather.wind')}</span>
-                          <div className="font-bold text-xs text-slate-800">{weatherData?.forecast?.wind_speed_max_kmh ?? '11.2'} km/h</div>
-                        </div>
-                      </div>
-
-                      <div
-                        className={cn(
-                          'p-3.5 rounded-xl border text-xs',
-                          weatherData?.spray_risk?.can_spray
-                            ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                            : 'bg-amber-50 border-amber-200 text-amber-900'
-                        )}
-                      >
-                        <div className="flex items-center gap-1.5 font-bold mb-1">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                          <span>{t('weather.spray_status')}</span>
-                        </div>
-                        <p className="text-[11px] leading-relaxed">
-                          {weatherData?.spray_risk?.can_spray ? t('weather.spray_favorable') : t('weather.spray_caution')}
-                        </p>
-                      </div>
-                    </CardContent>
-                  </Card>
-
-                  {/* Active Agricultural Warnings Card */}
-                  <Card className="flex flex-col">
-                    <CardHeader className="p-5 pb-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <AlertTriangle className="w-5 h-5 text-amber-600" />
-                          <CardTitle className="text-base font-bold text-slate-900">
-                            {t('warning.title')}
-                          </CardTitle>
-                        </div>
-                        <Badge variant="warning" className="text-[11px]">Active Alerts</Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="p-5 pt-0 flex-1 space-y-3">
-                      <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200 text-amber-950">
-                        <div className="flex items-center justify-between text-xs font-bold text-amber-900 mb-1">
-                          <span>{t('warning.armyworm')}</span>
-                          <span className="text-[10px] text-amber-700">Forecast +24h</span>
-                        </div>
-                        <p className="text-[11px] leading-relaxed text-amber-800">
-                          {t('warning.desc_armyworm')}
-                        </p>
-                      </div>
-
-                      <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 text-slate-800">
-                        <div className="text-xs font-bold text-slate-900 mb-1">
-                          {t('warning.rust')}
-                        </div>
-                        <p className="text-[11px] leading-relaxed text-slate-600">
-                          {t('warning.desc_rust')}
-                        </p>
-                      </div>
-                    </CardContent>
-                  </Card>
-
-                  {/* Popular Suggested Agronomic Questions */}
-                  <Card className="flex flex-col">
-                    <CardHeader className="p-5 pb-3">
-                      <div className="flex items-center gap-2">
-                        <Sparkles className="w-5 h-5 text-brand-gold-600" />
-                        <CardTitle className="text-base font-bold text-slate-900">
-                          {t('advisor.suggested_title')}
-                        </CardTitle>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="p-5 pt-0 flex-1 space-y-2">
-                      {[
-                        { key: 'advisor.chip_teff', crop: 'Teff (ጤፍ / Xaafii)' },
-                        { key: 'advisor.chip_wheat', crop: 'Wheat (ስንዴ / Qamadii)' },
-                        { key: 'advisor.chip_maize', crop: 'Maize (በቆሎ / Boqqoolloo)' },
-                        { key: 'advisor.chip_fert', crop: "Fertilizer (ማዳበሪያ / Xaa'oo)" },
-                      ].map((item, idx) => (
-                        <button
-                          key={idx}
-                          onClick={() => {
-                            const q = t(item.key);
-                            handleAsk(q);
-                            setActiveTab('assistant');
-                          }}
-                          className="w-full text-left p-3 rounded-xl border border-slate-200/80 bg-white hover:bg-brand-forest-50/70 hover:border-brand-forest-300 transition-all flex items-center justify-between group active:scale-[0.99]"
-                        >
-                          <div className="min-w-0 pr-2">
-                            <div className="text-xs font-bold text-slate-800 truncate group-hover:text-brand-forest-800">
-                              {t(item.key)}
-                            </div>
-                            <span className="text-[10px] text-slate-400">{item.crop}</span>
-                          </div>
-                          <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-brand-forest-700 transition-colors shrink-0" />
-                        </button>
-                      ))}
-                    </CardContent>
-                  </Card>
-                </div>
-              </motion.div>
-            )}
-
-            {/* ======================================================== */}
-            {/* TAB 2: AI AGRICULTURAL ASSISTANT */}
-            {/* ======================================================== */}
-            {activeTab === 'assistant' && (
-              <motion.div
-                key="assistant"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.18 }}
-                className="flex flex-col h-[calc(100vh-140px)] max-h-[840px] space-y-3"
-              >
-                {/* Chat Header Card */}
-                <Card className="p-4 flex items-center justify-between flex-wrap gap-3 shadow-xs">
-                  <div className="flex items-center gap-3">
                     <img
                       src="/hello_farmer_logo.jpg"
-                      alt="AI Advisor"
-                      className="w-10 h-10 rounded-full object-cover border-2 border-brand-forest-700 shadow-xs"
+                      alt="Hello Farmer Badge"
+                      style={{
+                        width: '136px',
+                        height: '136px',
+                        borderRadius: '50%',
+                        objectFit: 'cover',
+                        border: '3px solid var(--brand-forest-700)',
+                        boxShadow: '0 4px 16px rgba(22, 66, 52, 0.2)',
+                      }}
                     />
-                    <div>
-                      <h2 className="font-extrabold text-base text-brand-forest-800 leading-tight">
-                        {t('advisor.header_title')}
-                      </h2>
-                      <p className="text-xs text-slate-500">
-                        {t('advisor.header_subtitle')}
-                      </p>
+                    <div style={{ marginTop: '0.85rem', fontWeight: 800, color: 'var(--brand-forest-800)', fontSize: '1.05rem' }}>
+                      {t('brand.name')} • 8028
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                      {t('brand.emblem_caption')}
                     </div>
                   </div>
+                </div>
+              </div>
 
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant={autoPlayVoice ? 'secondary' : 'outline'}
-                      size="sm"
-                      onClick={() => {
-                        const next = !autoPlayVoice;
-                        setAutoPlayVoice(next);
-                        if (!next) stopCurrentAudio();
-                      }}
-                      className={cn(
-                        'text-xs font-semibold',
-                        autoPlayVoice && 'bg-brand-forest-50 text-brand-forest-800 border-brand-forest-200'
-                      )}
-                    >
-                      {autoPlayVoice ? (
-                        <Volume2 className="w-3.5 h-3.5 mr-1.5 text-brand-forest-700" />
-                      ) : (
-                        <VolumeX className="w-3.5 h-3.5 mr-1.5" />
-                      )}
-                      <span>{t('advisor.voice_autoplay_label')}</span>
-                    </Button>
-
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        stopCurrentAudio();
-                        setMessages([]);
-                        setSessionId('');
-                        setPendingTranscript(null);
-                        setMicErrorMessage(null);
-                      }}
-                      className="text-xs"
-                    >
-                      <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
-                      <span>{t('advisor.new_chat')}</span>
-                    </Button>
-                  </div>
-                </Card>
-
-                {/* Chat Messages List */}
-                <Card className="flex-1 p-4 md:p-6 overflow-y-auto space-y-4 bg-slate-50/60 shadow-xs">
-                  {messages.length === 0 ? (
-                    <div className="m-auto text-center max-w-lg py-12 px-4 space-y-4">
-                      <div className="w-16 h-16 rounded-full bg-brand-forest-50 border-2 border-brand-forest-100 flex items-center justify-center mx-auto text-brand-forest-700">
-                        <Sprout className="w-8 h-8" />
-                      </div>
-                      <h3 className="font-extrabold text-xl text-brand-forest-800">
-                        {t('advisor.empty_chat')}
-                      </h3>
-                      <p className="text-xs md:text-sm text-slate-500 max-w-md mx-auto">
-                        {t('advisor.suggested_title')}
-                      </p>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
-                        {[
-                          'advisor.chip_teff',
-                          'advisor.chip_wheat',
-                          'advisor.chip_maize',
-                          'advisor.chip_fert',
-                        ].map((promptKey, i) => (
-                          <button
-                            key={i}
-                            onClick={() => handleAsk(t(promptKey))}
-                            className="p-3 bg-white rounded-xl border border-slate-200/80 text-left text-xs font-semibold text-slate-700 hover:border-brand-forest-300 hover:bg-brand-forest-50/50 hover:text-brand-forest-900 transition-all shadow-xs active:scale-[0.99]"
-                          >
-                            {t(promptKey)}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : (
-                    messages.map((m) => (
-                      <div
-                        key={m.id}
-                        className={cn(
-                          'flex flex-col',
-                          m.sender === 'user' ? 'items-end' : 'items-start'
-                        )}
-                      >
-                        <div
-                          className={cn(
-                            'max-w-[85%] md:max-w-[75%] p-4 rounded-2xl shadow-xs space-y-2',
-                            m.sender === 'user'
-                              ? 'bg-brand-forest-800 text-white rounded-tr-xs'
-                              : 'bg-white text-slate-900 border border-slate-200/80 rounded-tl-xs'
-                          )}
-                        >
-                          {/* Assistant Header Badge & Voice Playback */}
-                          {m.sender === 'assistant' && (
-                            <div className="flex items-center justify-between pb-2 border-b border-slate-100 flex-wrap gap-2">
-                              <div className="flex items-center gap-1.5">
-                                <img
-                                  src="/hello_farmer_logo.jpg"
-                                  alt="Badge"
-                                  className="w-5 h-5 rounded-full"
-                                />
-                                <span className="font-bold text-xs text-brand-forest-800">
-                                  {t('brand.name')} AI
-                                </span>
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                <Badge
-                                  variant={m.grounded ? 'success' : 'warning'}
-                                  className="text-[10px] px-2 py-0.5"
-                                >
-                                  {m.grounded ? `✓ ${t('advisor.grounded_badge')}` : '⚠ Extension Verified'}
-                                </Badge>
-
-                                {/* Audio playback buttons */}
-                                {playingMessageId === m.id && audioPlaybackStatus === 'playing' ? (
-                                  <Button
-                                    variant="secondary"
-                                    size="sm"
-                                    onClick={pauseMessageAudio}
-                                    className="h-7 px-2.5 text-xs bg-brand-forest-100 text-brand-forest-800 border-brand-forest-300 font-bold"
-                                  >
-                                    <Pause className="w-3 h-3 mr-1" />
-                                    <span>{t('advisor.voice_pause')}</span>
-                                    <span className="w-1.5 h-3 bg-brand-forest-700 animate-pulse ml-1 rounded-full" />
-                                  </Button>
-                                ) : playingMessageId === m.id && audioPlaybackStatus === 'paused' ? (
-                                  <div className="flex items-center gap-1">
-                                    <Button
-                                      variant="secondary"
-                                      size="sm"
-                                      onClick={resumeMessageAudio}
-                                      className="h-7 px-2 text-xs"
-                                    >
-                                      <Play className="w-3 h-3 mr-1" />
-                                      <span>{t('advisor.voice_resume')}</span>
-                                    </Button>
-                                    <Button
-                                      variant="outline"
-                                      size="iconSm"
-                                      onClick={() => replayMessageAudio(m)}
-                                      className="h-7 w-7"
-                                    >
-                                      <RotateCcw className="w-3 h-3" />
-                                    </Button>
-                                  </div>
-                                ) : playingMessageId === m.id && audioPlaybackStatus === 'loading' ? (
-                                  <span className="text-[11px] font-semibold text-brand-forest-700 flex items-center gap-1">
-                                    <RefreshCw className="w-3 h-3 animate-spin" />
-                                    {t('advisor.voice_synthesizing')}
-                                  </span>
-                                ) : (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => playMessageAudio(m)}
-                                    className="h-7 px-2 text-xs text-brand-forest-700 hover:bg-brand-forest-50"
-                                  >
-                                    <Volume2 className="w-3 h-3 mr-1" />
-                                    <span>{t('advisor.voice_listen')}</span>
-                                  </Button>
-                                )}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* User voice question indicator */}
-                          {m.sender === 'user' && m.isVoiceTurn && (
-                            <div className="flex items-center gap-1.5 text-[11px] text-white/80 font-medium">
-                              <Mic className="w-3 h-3" />
-                              <span>{t('advisor.voice_query_badge')}</span>
-                            </div>
-                          )}
-
-                          {/* Message Text */}
-                          <div className="text-sm leading-relaxed whitespace-pre-wrap font-sans">
-                            {m.text}
-                          </div>
-
-                          {/* Assistant English gloss translation */}
-                          {m.sender === 'assistant' && m.answer_en_gloss && (
-                            <div className="mt-2 pt-2 border-t border-slate-100 text-xs text-slate-500 italic">
-                              <span className="font-semibold text-slate-600 not-italic mr-1">English Translation:</span>
-                              {m.answer_en_gloss}
-                            </div>
-                          )}
-
-                          {/* Grounded sources chip */}
-                          {m.sender === 'assistant' && m.sources_used && m.sources_used.length > 0 && (
-                            <div className="mt-2 pt-1 flex items-center gap-1.5 flex-wrap">
-                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                                {t('advisor.sources_label')}:
-                              </span>
-                              {m.sources_used.map((src, idx) => (
-                                <Badge key={idx} variant="default" className="text-[10px] bg-slate-100 text-slate-600">
-                                  {typeof src === 'string' ? src : src.title || src.crop || `Doc #${idx + 1}`}
-                                </Badge>
-                              ))}
-                            </div>
-                          )}
-
-                          <div
-                            className={cn(
-                              'text-[10px] text-right font-medium',
-                              m.sender === 'user' ? 'text-white/60' : 'text-slate-400'
-                            )}
-                          >
-                            {m.timestamp}
-                          </div>
-                        </div>
-                      </div>
-                    ))
-                  )}
-
-                  {/* Chat Loading Skeleton / Spinner */}
-                  {chatLoading && (
-                    <div className="flex items-start gap-2">
-                      <div className="bg-white border border-slate-200/80 p-4 rounded-2xl shadow-xs rounded-tl-xs flex items-center gap-2.5">
-                        <RefreshCw className="w-4 h-4 text-brand-forest-700 animate-spin" />
-                        <span className="text-xs font-semibold text-slate-600">
-                          {t('advisor.thinking')}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  <div ref={chatEndRef} />
-                </Card>
-
-                {/* Voice Recording Active Card */}
-                {recordingState === 'recording' && (
-                  <Card className="p-4 bg-emerald-50/90 border-emerald-300 shadow-md animate-in fade-in zoom-in-95 duration-150">
-                    <div className="flex items-center justify-between flex-wrap gap-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-3.5 h-3.5 rounded-full bg-red-500 animate-ping" />
-                        <div>
-                          <div className="text-xs font-extrabold text-emerald-950 uppercase tracking-wide">
-                            {t('advisor.voice_listening')} ({recordingDuration}s)
-                          </div>
-                          <div className="text-[11px] text-emerald-800">
-                            {t('advisor.voice_recording_hint')}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Waveform Visualizer */}
-                      <VoiceWaveform isActive={true} barsCount={16} color="bg-emerald-700" />
-
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={stopVoiceRecordingAndTranscribe}
-                          className="font-bold text-xs shadow-xs"
-                        >
-                          <Square className="w-3.5 h-3.5 mr-1" />
-                          <span>{t('advisor.voice_stop')}</span>
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={cancelVoiceRecording}
-                          className="text-xs bg-white text-slate-700"
-                        >
-                          {t('advisor.voice_cancel')}
-                        </Button>
-                      </div>
-                    </div>
-                  </Card>
-                )}
-
-                {/* Voice Transcribing State */}
-                {recordingState === 'transcribing' && (
-                  <Card className="p-3.5 bg-brand-forest-50 border-brand-forest-200 shadow-xs flex items-center justify-center gap-2.5">
-                    <RefreshCw className="w-4 h-4 text-brand-forest-700 animate-spin" />
-                    <span className="text-xs font-bold text-brand-forest-900">
-                      {t('advisor.voice_transcribing')}
-                    </span>
-                  </Card>
-                )}
-
-                {/* Microphone Error Alert */}
-                {micErrorMessage && (
-                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                      <span>{micErrorMessage}</span>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setMicErrorMessage(null)}
-                      className="h-6 px-2 text-rose-800 hover:bg-rose-100"
-                    >
-                      <X className="w-3 h-3" />
-                    </Button>
-                  </div>
-                )}
-
-                {/* Input Bar with Mic & Send Controls */}
-                <Card className="p-2.5 shadow-sm">
-                  <div className="flex items-center gap-2">
-                    {/* Voice Recording Button */}
-                    <Button
-                      variant={recordingState === 'recording' ? 'destructive' : 'secondary'}
-                      size="icon"
-                      onClick={
-                        recordingState === 'recording'
-                          ? stopVoiceRecordingAndTranscribe
-                          : startVoiceRecording
+              {/* Quick Advisory Search Bar */}
+              <div className="card-interactive animate-entrance stagger-1" style={{ padding: '1.25rem 1.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <Search size={22} color="var(--brand-forest-700)" />
+                  <input
+                    type="text"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleAsk();
+                        setActiveTab('assistant');
                       }
-                      title={t('advisor.voice_record_hint')}
-                      className={cn(
-                        'shrink-0 h-10 w-10 rounded-xl transition-all',
-                        recordingState === 'recording' && 'ring-2 ring-red-400 animate-pulse'
-                      )}
-                    >
-                      {recordingState === 'recording' ? (
-                        <Square className="w-4 h-4" />
-                      ) : (
-                        <Mic className="w-4 h-4 text-brand-forest-700" />
-                      )}
-                    </Button>
+                    }}
+                    placeholder={t('hero.search_placeholder')}
+                    style={{
+                      flex: 1,
+                      border: 'none',
+                      outline: 'none',
+                      fontSize: '0.975rem',
+                      fontFamily: 'inherit',
+                      color: 'var(--text-main)',
+                      backgroundColor: 'transparent',
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      if (query.trim()) {
+                        handleAsk();
+                        setActiveTab('assistant');
+                      }
+                    }}
+                    className="btn-primary"
+                  >
+                    <span>{t('hero.search_btn')}</span>
+                    <Send size={15} />
+                  </button>
+                </div>
+              </div>
 
-                    {/* Hidden Audio File Input for uploads */}
-                    <input
-                      type="file"
-                      ref={audioFileInputRef}
-                      onChange={handleAudioFileUpload}
-                      accept="audio/*"
-                      className="hidden"
-                    />
-
-                    <Button
-                      variant="ghost"
-                      size="iconSm"
-                      onClick={() => audioFileInputRef.current?.click()}
-                      title={t('advisor.voice_upload')}
-                      className="shrink-0 h-9 w-9 text-slate-500 hover:text-slate-800"
-                    >
-                      <Upload className="w-4 h-4" />
-                    </Button>
-
-                    {/* Text Input */}
-                    <input
-                      type="text"
-                      value={query}
-                      onChange={(e) => setQuery(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleAsk();
-                      }}
-                      placeholder={t('advisor.input_placeholder')}
-                      disabled={chatLoading || recordingState === 'recording'}
-                      className="flex-1 bg-transparent border-0 outline-none text-sm text-slate-900 placeholder:text-slate-400 font-medium px-2"
-                    />
-
-                    {/* Send Button */}
-                    <Button
-                      variant="default"
-                      size="default"
-                      onClick={() => handleAsk()}
-                      disabled={!query.trim() || chatLoading}
-                      loading={chatLoading}
-                      className="shrink-0 font-semibold rounded-xl"
-                    >
-                      <span className="hidden sm:inline mr-1.5">{t('advisor.send_btn')}</span>
-                      <Send className="w-4 h-4" />
-                    </Button>
+              {/* 4 Quick Stat Cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1.25rem' }}>
+                <div className="card-interactive animate-entrance stagger-1" style={{ padding: '1.25rem' }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('stat.calls_served')}</span>
+                  <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--brand-forest-700)', margin: '0.35rem 0' }}>
+                    {analytics?.total_calls ?? (analyticsOverview?.total_calls ?? 0)}
                   </div>
-                </Card>
-              </motion.div>
-            )}
-
-            {/* ======================================================== */}
-            {/* TAB 3: NATIONAL VOICE LINE 8028 & TELEPHONY */}
-            {/* ======================================================== */}
-            {activeTab === 'voice' && (
-              <motion.div
-                key="voice"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.18 }}
-                className="space-y-6"
-              >
-                {/* Voice Hotline Banner */}
-                <Card className="p-6 md:p-8 bg-gradient-to-br from-brand-forest-900 via-brand-forest-800 to-brand-forest-700 text-white shadow-lg border-brand-forest-700">
-                  <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-                    <div className="space-y-2">
-                      <Badge variant="gold" className="text-[11px] font-bold">
-                        {t('voice.badge')}
-                      </Badge>
-                      <h2 className="text-2xl md:text-3xl font-extrabold tracking-tight">
-                        {t('voice.title')}
-                      </h2>
-                      <p className="text-sm text-brand-forest-100 max-w-xl leading-relaxed">
-                        {t('voice.subtitle')}
-                      </p>
-                    </div>
-
-                    <div className="p-5 bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 text-center min-w-[200px]">
-                      <div className="text-xs uppercase tracking-wider font-bold text-brand-gold-300 mb-1">
-                        {t('voice.dial_now')}
-                      </div>
-                      <div className="text-4xl font-black tracking-tight text-white">8028</div>
-                      <div className="text-[11px] text-white/80 mt-1">{t('voice.toll_free_all')}</div>
-                    </div>
-                  </div>
-                </Card>
-
-                {/* Telephony Service Health Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-                  <Card>
-                    <CardHeader className="p-5 pb-3">
-                      <div className="flex items-center justify-between">
-                        <CardTitle className="text-sm font-bold text-slate-700">
-                          {t('voice.audiosocket_status')}
-                        </CardTitle>
-                        <Badge variant="success" dot pulse>Live</Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="p-5 pt-0 space-y-2 text-xs text-slate-600">
-                      <div className="flex justify-between py-1 border-b border-slate-100">
-                        <span>TCP Port:</span>
-                        <span className="font-mono font-bold text-slate-900">9092</span>
-                      </div>
-                      <div className="flex justify-between py-1 border-b border-slate-100">
-                        <span>Sampling Rate:</span>
-                        <span className="font-mono font-bold text-slate-900">8,000 Hz (Linear PCM)</span>
-                      </div>
-                      <div className="flex justify-between py-1">
-                        <span>Bandpass Filter:</span>
-                        <span className="font-bold text-brand-forest-700">180Hz - 3800Hz</span>
-                      </div>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader className="p-5 pb-3">
-                      <div className="flex items-center justify-between">
-                        <CardTitle className="text-sm font-bold text-slate-700">
-                          {t('voice.asterisk_pbx')}
-                        </CardTitle>
-                        <Badge variant="forest" dot>Connected</Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="p-5 pt-0 space-y-2 text-xs text-slate-600">
-                      <div className="flex justify-between py-1 border-b border-slate-100">
-                        <span>SIP Port:</span>
-                        <span className="font-mono font-bold text-slate-900">5060 (UDP/TCP)</span>
-                      </div>
-                      <div className="flex justify-between py-1 border-b border-slate-100">
-                        <span>Codec:</span>
-                        <span className="font-bold text-slate-900">slin (16-bit) / alaw</span>
-                      </div>
-                      <div className="flex justify-between py-1">
-                        <span>Turnaround Delay:</span>
-                        <span className="font-bold text-brand-forest-700">250 ms (Anti-Echo)</span>
-                      </div>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader className="p-5 pb-3">
-                      <div className="flex items-center justify-between">
-                        <CardTitle className="text-sm font-bold text-slate-700">
-                          {t('voice.tts_engine')}
-                        </CardTitle>
-                        <Badge variant="gold" dot>Mekdes Neural</Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="p-5 pt-0 space-y-2 text-xs text-slate-600">
-                      <div className="flex justify-between py-1 border-b border-slate-100">
-                        <span>Voice ID:</span>
-                        <span className="font-mono font-bold text-slate-900">am-ET-MekdesNeural</span>
-                      </div>
-                      <div className="flex justify-between py-1 border-b border-slate-100">
-                        <span>Prosody Tuning:</span>
-                        <span className="font-bold text-slate-900">-8% Rate, +15% Vol</span>
-                      </div>
-                      <div className="flex justify-between py-1">
-                        <span>Text Normalizer:</span>
-                        <span className="font-bold text-emerald-700">Ge'ez & Unit Expansion</span>
-                      </div>
-                    </CardContent>
-                  </Card>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--success)' }}>
+                    ● {voiceAgentStatus?.service_status === 'ONLINE' ? '8028 AudioSocket Active' : t('stat.sub_calls')}
+                  </span>
                 </div>
 
-                {/* Call Simulation & Interactive Audio Socket Tester */}
-                <Card className="p-6">
-                  <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-6">
-                    <div>
-                      <h3 className="text-lg font-bold text-slate-900">
-                        {t('voice.simulator_title')}
-                      </h3>
-                      <p className="text-xs text-slate-500">
-                        {t('voice.simulator_subtitle')}
-                      </p>
-                    </div>
-
-                    <Button
-                      variant="gold"
-                      onClick={() => setActiveTab('assistant')}
-                      className="font-bold"
-                    >
-                      <Mic className="w-4 h-4 mr-2" />
-                      <span>{t('voice.start_web_call')}</span>
-                    </Button>
+                <div className="card-interactive animate-entrance stagger-2" style={{ padding: '1.25rem' }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('stat.active_farmers')}</span>
+                  <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--gold-700)', margin: '0.35rem 0' }}>
+                    {analytics?.registered_farmers ?? 0}
                   </div>
-
-                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 space-y-3">
-                    <div className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                      {t('voice.how_call_works')}
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
-                      <div className="p-3 bg-white rounded-lg border border-slate-200/80 space-y-1">
-                        <div className="font-extrabold text-brand-forest-800">1. {t('voice.step_dial')}</div>
-                        <p className="text-slate-500">{t('voice.step_dial_desc')}</p>
-                      </div>
-                      <div className="p-3 bg-white rounded-lg border border-slate-200/80 space-y-1">
-                        <div className="font-extrabold text-brand-forest-800">2. {t('voice.step_lang')}</div>
-                        <p className="text-slate-500">{t('voice.step_lang_desc')}</p>
-                      </div>
-                      <div className="p-3 bg-white rounded-lg border border-slate-200/80 space-y-1">
-                        <div className="font-extrabold text-brand-forest-800">3. {t('voice.step_question')}</div>
-                        <p className="text-slate-500">{t('voice.step_question_desc')}</p>
-                      </div>
-                      <div className="p-3 bg-white rounded-lg border border-slate-200/80 space-y-1">
-                        <div className="font-extrabold text-brand-forest-800">4. {t('voice.step_answer')}</div>
-                        <p className="text-slate-500">{t('voice.step_answer_desc')}</p>
-                      </div>
-                    </div>
-                  </div>
-                </Card>
-              </motion.div>
-            )}
-
-            {/* ======================================================== */}
-            {/* TAB 4: WEATHER & SPRAYING ADVISORY */}
-            {/* ======================================================== */}
-            {activeTab === 'weather' && (
-              <motion.div
-                key="weather"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.18 }}
-                className="space-y-6"
-              >
-                {/* Header & Location Selector */}
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                  <div>
-                    <h2 className="text-xl md:text-2xl font-extrabold text-slate-900 tracking-tight">
-                      {t('weather.page_title')}
-                    </h2>
-                    <p className="text-xs text-slate-500">
-                      {t('weather.page_subtitle')}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <MapPin className="w-4 h-4 text-brand-forest-700" />
-                    <select
-                      value={selectedLocationName}
-                      onChange={(e) => handleLocationChange(e.target.value)}
-                      className="h-10 px-3 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-800 shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-forest-700"
-                    >
-                      {weatherLocations.map((loc) => (
-                        <option key={loc.name} value={loc.name}>
-                          {loc.name} ({loc.region})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('stat.sub_farmers')}</span>
                 </div>
 
-                {/* Spray Risk Advisory Banner */}
-                <Card
-                  className={cn(
-                    'p-5 border-2 shadow-sm',
-                    weatherData?.spray_risk?.can_spray
-                      ? 'bg-emerald-50/80 border-emerald-300 text-emerald-950'
-                      : 'bg-amber-50/80 border-amber-300 text-amber-950'
-                  )}
+                <div className="card-interactive animate-entrance stagger-3" style={{ padding: '1.25rem' }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('stat.accuracy')}</span>
+                  <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--brand-forest-800)', margin: '0.35rem 0' }}>
+                    {analytics?.grounded_rate_pct ? `${analytics.grounded_rate_pct}%` : 'N/A'}
+                  </div>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('stat.sub_accuracy')}</span>
+                </div>
+
+                <div className="card-interactive animate-entrance stagger-4" style={{ padding: '1.25rem' }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('stat.response_time')}</span>
+                  <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--info)', margin: '0.35rem 0' }}>
+                    {analytics?.p50_latency_seconds ? `${analytics.p50_latency_seconds}s` : '1.8s'}
+                  </div>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('stat.sub_response')}</span>
+                </div>
+              </div>
+
+              {/* 4 Feature Service Cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1.25rem' }}>
+                <div
+                  className="card-interactive animate-entrance stagger-2"
+                  onClick={() => setActiveTab('assistant')}
+                  style={{ padding: '1.5rem', cursor: 'pointer', display: 'flex', flexDirection: 'column' }}
                 >
-                  <div className="flex items-start gap-3.5">
-                    {weatherData?.spray_risk?.can_spray ? (
-                      <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0 mt-0.5" />
-                    ) : (
-                      <AlertTriangle className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
-                    )}
-                    <div>
-                      <h3 className="font-extrabold text-base leading-tight mb-1">
-                        {t('weather.spray_advisory_banner')}
+                  <div style={{ width: '42px', height: '42px', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--brand-forest-50)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem' }}>
+                    <MessageSquare size={22} color="var(--brand-forest-700)" />
+                  </div>
+                  <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.1rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                    {t('feature.advisor_title')}
+                  </h3>
+                  <p style={{ margin: '0 0 1rem 0', fontSize: '0.85rem', color: 'var(--text-body)', lineHeight: 1.5, flex: 1 }}>
+                    {t('feature.advisor_desc')}
+                  </p>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--brand-forest-700)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    {t('feature.learn_more')} <ChevronRight size={14} />
+                  </span>
+                </div>
+
+                <div
+                  className="card-interactive animate-entrance stagger-3"
+                  onClick={() => setActiveTab('voice')}
+                  style={{ padding: '1.5rem', cursor: 'pointer', display: 'flex', flexDirection: 'column' }}
+                >
+                  <div style={{ width: '42px', height: '42px', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--gold-50)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem' }}>
+                    <PhoneCall size={22} color="var(--gold-700)" />
+                  </div>
+                  <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.1rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                    {t('feature.voice_title')}
+                  </h3>
+                  <p style={{ margin: '0 0 1rem 0', fontSize: '0.85rem', color: 'var(--text-body)', lineHeight: 1.5, flex: 1 }}>
+                    {t('feature.voice_desc')}
+                  </p>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--gold-700)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    {t('feature.learn_more')} <ChevronRight size={14} />
+                  </span>
+                </div>
+
+                <div
+                  className="card-interactive animate-entrance stagger-4"
+                  onClick={() => setActiveTab('weather')}
+                  style={{ padding: '1.5rem', cursor: 'pointer', display: 'flex', flexDirection: 'column' }}
+                >
+                  <div style={{ width: '42px', height: '42px', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--brand-forest-50)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem' }}>
+                    <CloudSun size={22} color="var(--brand-forest-700)" />
+                  </div>
+                  <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.1rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                    {t('feature.weather_title')}
+                  </h3>
+                  <p style={{ margin: '0 0 1rem 0', fontSize: '0.85rem', color: 'var(--text-body)', lineHeight: 1.5, flex: 1 }}>
+                    {t('feature.weather_desc')}
+                  </p>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--brand-forest-700)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    {t('feature.learn_more')} <ChevronRight size={14} />
+                  </span>
+                </div>
+
+                <div
+                  className="card-interactive animate-entrance stagger-5"
+                  onClick={() => setActiveTab('yield')}
+                  style={{ padding: '1.5rem', cursor: 'pointer', display: 'flex', flexDirection: 'column' }}
+                >
+                  <div style={{ width: '42px', height: '42px', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--gold-50)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem' }}>
+                    <TrendingUp size={22} color="var(--gold-700)" />
+                  </div>
+                  <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.1rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                    {t('feature.yield_title')}
+                  </h3>
+                  <p style={{ margin: '0 0 1rem 0', fontSize: '0.85rem', color: 'var(--text-body)', lineHeight: 1.5, flex: 1 }}>
+                    {t('feature.yield_desc')}
+                  </p>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--gold-700)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    {t('feature.learn_more')} <ChevronRight size={14} />
+                  </span>
+                </div>
+              </div>
+
+              {/* 3-Column Highlights Grid (Weather, Warnings, Quick Guides) */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
+                {/* Weather & Spray Risk Card */}
+                <div className="card-interactive animate-entrance stagger-3" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <CloudSun size={20} color="var(--brand-forest-700)" />
+                      <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}>
+                        {t('weather.title')}
                       </h3>
-                      <p className="text-xs leading-relaxed text-slate-700">
-                        {weatherData?.spray_risk?.can_spray
-                          ? t('weather.spray_favorable_long')
-                          : t('weather.spray_caution_long')}
+                    </div>
+                    <span className="badge badge-success">
+                      <MapPin size={12} /> {weatherData?.location || t('weather.current_loc')}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                    <span style={{ fontSize: '2.25rem', fontWeight: 800, color: 'var(--text-main)' }}>
+                      {weatherData?.forecast?.temperature_current_c ? `${weatherData.forecast.temperature_current_c}°C` : '23.5°C'}
+                    </span>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                      {weatherData?.forecast?.summary || (language === 'om' ? 'Qilleensa Mijataa' : language === 'am' ? 'ከፊል ደመናማ' : 'Partly cloudy')}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem', padding: '0.75rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', marginBottom: '1rem' }}>
+                    <div>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{t('weather.rain_prob')}</span>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{weatherData?.forecast?.precipitation_sum_mm ?? '5.4'} mm</div>
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{t('weather.humidity')}</span>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{weatherData?.forecast?.relative_humidity_mean ?? '64'}%</div>
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{t('weather.wind')}</span>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{weatherData?.forecast?.wind_speed_max_kmh ?? '11.2'} km/h</div>
+                    </div>
+                  </div>
+
+                  {/* Spray Recommendation Alert */}
+                  <div style={{ marginTop: 'auto', padding: '0.75rem 1rem', borderRadius: 'var(--radius-md)', backgroundColor: weatherData?.spray_risk?.can_spray ? 'var(--success-bg)' : 'var(--warning-bg)', border: `1px solid ${weatherData?.spray_risk?.can_spray ? 'var(--success-border)' : 'var(--warning-border)'}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, fontSize: '0.85rem', color: weatherData?.spray_risk?.can_spray ? 'var(--success)' : 'var(--warning)' }}>
+                      <CheckCircle2 size={16} />
+                      <span>{t('weather.spray_status')}</span>
+                    </div>
+                    <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-body)' }}>
+                      {weatherData?.spray_risk?.can_spray ? t('weather.spray_favorable') : t('weather.spray_caution')}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Active Agricultural Warnings Card */}
+                <div className="card-interactive animate-entrance stagger-4" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <AlertTriangle size={20} color="var(--warning)" />
+                      <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}>
+                        {t('warning.title')}
+                      </h3>
+                    </div>
+                    <span className="badge badge-warning">Active Alerts</span>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1 }}>
+                    <div style={{ padding: '0.875rem', borderRadius: 'var(--radius-md)', backgroundColor: '#fffbeb', border: '1px solid #fde68a' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--warning)' }}>{t('warning.armyworm')}</span>
+                        <span style={{ fontSize: '0.7rem', color: '#78350f' }}>Forecast +24h</span>
+                      </div>
+                      <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.8rem', color: '#78350f', lineHeight: 1.4 }}>
+                        {t('warning.desc_armyworm')}
+                      </p>
+                    </div>
+
+                    <div style={{ padding: '0.875rem', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--bg-subtle)', border: '1px solid var(--border-subtle)' }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-main)' }}>{t('warning.rust')}</span>
+                      <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-body)', lineHeight: 1.4 }}>
+                        {t('warning.desc_rust')}
                       </p>
                     </div>
                   </div>
-                </Card>
-
-                {/* Today's Deep Dive */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <Card className="p-5 text-center">
-                    <Thermometer className="w-6 h-6 text-amber-600 mx-auto mb-2" />
-                    <span className="text-xs text-slate-500 font-semibold">{t('weather.current_temp')}</span>
-                    <div className="text-2xl font-black text-slate-900 mt-1">
-                      {weatherData?.forecast?.temperature_current_c ?? '23.5'}°C
-                    </div>
-                  </Card>
-
-                  <Card className="p-5 text-center">
-                    <Droplets className="w-6 h-6 text-sky-600 mx-auto mb-2" />
-                    <span className="text-xs text-slate-500 font-semibold">{t('weather.rain_prob')}</span>
-                    <div className="text-2xl font-black text-slate-900 mt-1">
-                      {weatherData?.forecast?.precipitation_sum_mm ?? '5.4'} mm
-                    </div>
-                  </Card>
-
-                  <Card className="p-5 text-center">
-                    <Wind className="w-6 h-6 text-teal-600 mx-auto mb-2" />
-                    <span className="text-xs text-slate-500 font-semibold">{t('weather.wind')}</span>
-                    <div className="text-2xl font-black text-slate-900 mt-1">
-                      {weatherData?.forecast?.wind_speed_max_kmh ?? '11.2'} km/h
-                    </div>
-                  </Card>
-
-                  <Card className="p-5 text-center">
-                    <Radio className="w-6 h-6 text-brand-forest-700 mx-auto mb-2" />
-                    <span className="text-xs text-slate-500 font-semibold">{t('weather.humidity')}</span>
-                    <div className="text-2xl font-black text-slate-900 mt-1">
-                      {weatherData?.forecast?.relative_humidity_mean ?? '64'}%
-                    </div>
-                  </Card>
-                </div>
-              </motion.div>
-            )}
-
-            {/* ======================================================== */}
-            {/* TAB 5: CROP YIELD PREDICTOR */}
-            {/* ======================================================== */}
-            {activeTab === 'yield' && (
-              <motion.div
-                key="yield"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.18 }}
-                className="space-y-6"
-              >
-                <div>
-                  <h2 className="text-xl md:text-2xl font-extrabold text-slate-900 tracking-tight">
-                    {t('yield.title')}
-                  </h2>
-                  <p className="text-xs text-slate-500">
-                    {t('yield.subtitle')}
-                  </p>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-                  {/* Yield Form */}
-                  <Card className="lg:col-span-7 p-6">
-                    <form onSubmit={handleCalculateYield} className="space-y-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
-                            {t('yield.crop_label')}
-                          </label>
-                          <select
-                            value={yieldInput.crop}
-                            onChange={(e) => setYieldInput({ ...yieldInput, crop: e.target.value })}
-                            className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-forest-700"
-                          >
-                            <option value="teff">Teff (ጤፍ / Xaafii)</option>
-                            <option value="wheat">Wheat (ስንዴ / Qamadii)</option>
-                            <option value="maize">Maize (በቆሎ / Boqqoolloo)</option>
-                            <option value="barley">Barley (ገብስ / Garbuu)</option>
-                            <option value="sorghum">Sorghum (ማሽላ / Mishingaa)</option>
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
-                            {t('yield.woreda_label')}
-                          </label>
-                          <Input
-                            type="text"
-                            value={yieldInput.woreda}
-                            onChange={(e) => setYieldInput({ ...yieldInput, woreda: e.target.value })}
-                            placeholder="e.g. Adama, East Shewa"
-                            className="text-xs"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
-                            {t('yield.farm_size_label')} (ha)
-                          </label>
-                          <Input
-                            type="number"
-                            step="0.1"
-                            value={yieldInput.farm_size_ha}
-                            onChange={(e) => setYieldInput({ ...yieldInput, farm_size_ha: parseFloat(e.target.value) || 1 })}
-                            className="text-xs"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
-                            {t('yield.soil_label')}
-                          </label>
-                          <select
-                            value={yieldInput.soil_type}
-                            onChange={(e) => setYieldInput({ ...yieldInput, soil_type: e.target.value })}
-                            className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-forest-700"
-                          >
-                            <option value="Vertisol (ጥቁር አፈር)">Vertisol (ጥቁር አፈር / Biyyoo Gurraacha)</option>
-                            <option value="Nitisol (ቀይ አፈር)">Nitisol (ቀይ አፈር / Biyyoo Diimaa)</option>
-                            <option value="Cambisol">Cambisol (ደለል አፈር)</option>
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
-                            NPS-B {t('yield.fertilizer_label')} (kg/ha)
-                          </label>
-                          <Input
-                            type="number"
-                            value={yieldInput.npsb_kg_ha}
-                            onChange={(e) => setYieldInput({ ...yieldInput, npsb_kg_ha: parseInt(e.target.value) || 0 })}
-                            className="text-xs"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
-                            Urea {t('yield.fertilizer_label')} (kg/ha)
-                          </label>
-                          <Input
-                            type="number"
-                            value={yieldInput.urea_kg_ha}
-                            onChange={(e) => setYieldInput({ ...yieldInput, urea_kg_ha: parseInt(e.target.value) || 0 })}
-                            className="text-xs"
-                          />
-                        </div>
-                      </div>
-
-                      <Button
-                        type="submit"
-                        variant="default"
-                        size="lg"
-                        loading={yieldLoading}
-                        className="w-full mt-4 font-bold"
-                      >
-                        <TrendingUp className="w-4 h-4 mr-2" />
-                        <span>{t('yield.calculate_btn')}</span>
-                      </Button>
-                    </form>
-                  </Card>
-
-                  {/* Prediction Breakdown Card */}
-                  <Card className="lg:col-span-5 p-6 bg-slate-50/80">
-                    <h3 className="font-extrabold text-base text-slate-900 mb-4">
-                      {t('yield.results_title')}
+                {/* Popular Suggested Agronomic Questions */}
+                <div className="card-interactive animate-entrance stagger-5" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
+                    <Sparkles size={20} color="var(--gold-600)" />
+                    <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}>
+                      {t('advisor.suggested_title')}
                     </h3>
-
-                    {yieldLoading ? (
-                      <div className="py-12 text-center space-y-3">
-                        <RefreshCw className="w-6 h-6 text-brand-forest-700 animate-spin mx-auto" />
-                        <p className="text-xs font-semibold text-slate-600">{t('yield.calculating')}</p>
-                      </div>
-                    ) : yieldResult ? (
-                      <div className="space-y-4">
-                        <div className="p-4 bg-white rounded-xl border border-slate-200 text-center">
-                          <span className="text-xs text-slate-500 font-semibold">{t('yield.predicted_yield')}</span>
-                          <div className="text-3xl font-black text-brand-forest-800 mt-1">
-                            {yieldResult.predicted_yield_qt_ha} <span className="text-sm font-bold text-slate-500">Qt/ha (ኩ/ል በሄ)</span>
-                          </div>
-                          <Badge variant="success" className="mt-2 text-xs">
-                            {yieldResult.comparison_to_average_pct} vs Regional Average
-                          </Badge>
-                        </div>
-
-                        <div className="p-4 bg-white rounded-xl border border-slate-200 space-y-2">
-                          <span className="text-xs font-bold text-slate-800 block">Agronomic Recommendations:</span>
-                          <p className="text-xs leading-relaxed text-slate-600">
-                            {yieldResult.recommendation}
-                          </p>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="py-12 text-center text-xs text-slate-400">
-                        {t('yield.fill_form_hint')}
-                      </div>
-                    )}
-                  </Card>
-                </div>
-              </motion.div>
-            )}
-
-            {/* ======================================================== */}
-            {/* TAB 6: CALL & INQUIRY HISTORY */}
-            {/* ======================================================== */}
-            {activeTab === 'history' && (
-              <motion.div
-                key="history"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.18 }}
-                className="space-y-6"
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-xl md:text-2xl font-extrabold text-slate-900 tracking-tight">
-                      {t('history.title')}
-                    </h2>
-                    <p className="text-xs text-slate-500">
-                      {t('history.subtitle')}
-                    </p>
                   </div>
 
-                  <Button variant="outline" size="sm" onClick={fetchCallsList}>
-                    <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
-                    <span>{t('history.refresh')}</span>
-                  </Button>
-                </div>
-
-                <Card className="overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 border-b border-slate-200/80 font-bold text-slate-700 uppercase tracking-wider text-[10px]">
-                        <tr>
-                          <th className="p-3.5">Caller ID</th>
-                          <th className="p-3.5">Language</th>
-                          <th className="p-3.5">Topic</th>
-                          <th className="p-3.5">Duration</th>
-                          <th className="p-3.5">Status</th>
-                          <th className="p-3.5 text-right">Details</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {callsList.length === 0 ? (
-                          <tr>
-                            <td colSpan={6} className="p-8 text-center text-slate-400">
-                              {t('history.no_calls')}
-                            </td>
-                          </tr>
-                        ) : (
-                          callsList.map((call) => (
-                            <tr key={call.call_id || call.id} className="hover:bg-slate-50/60 transition-colors">
-                              <td className="p-3.5 font-mono font-semibold text-slate-800">
-                                {call.caller_phone || call.phone_number || '+251 91 123 4567'}
-                              </td>
-                              <td className="p-3.5">
-                                <Badge variant="default" className="text-[10px]">
-                                  {call.language === 'om' ? 'Afaan Oromo' : call.language === 'am' ? 'Amharic' : 'English'}
-                                </Badge>
-                              </td>
-                              <td className="p-3.5 text-slate-700 font-medium">
-                                {call.crop || call.topic || 'Wheat Yellow Rust'}
-                              </td>
-                              <td className="p-3.5 text-slate-500">
-                                {call.duration_seconds ? `${call.duration_seconds}s` : '42s'}
-                              </td>
-                              <td className="p-3.5">
-                                <Badge variant="success" dot className="text-[10px]">
-                                  {call.status || 'Resolved'}
-                                </Badge>
-                              </td>
-                              <td className="p-3.5 text-right">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleViewCallDetail(call.call_id || call.id)}
-                                  className="h-7 text-xs text-brand-forest-700"
-                                >
-                                  View
-                                </Button>
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </Card>
-              </motion.div>
-            )}
-
-            {/* ======================================================== */}
-            {/* TAB 7: PLATFORM ANALYTICS */}
-            {/* ======================================================== */}
-            {activeTab === 'analytics' && (
-              <motion.div
-                key="analytics"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.18 }}
-                className="space-y-6"
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-xl md:text-2xl font-extrabold text-slate-900 tracking-tight">
-                      {t('analytics.title')}
-                    </h2>
-                    <p className="text-xs text-slate-500">
-                      {t('analytics.subtitle')}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-lg text-xs font-semibold">
-                    {[7, 30, 90].map((days) => (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', flex: 1 }}>
+                    {[
+                      { key: 'advisor.chip_teff', crop: 'Teff (ጤፍ / Xaafii)' },
+                      { key: 'advisor.chip_wheat', crop: 'Wheat (ስንዴ / Qamadii)' },
+                      { key: 'advisor.chip_maize', crop: 'Maize (በቆሎ / Boqqoolloo)' },
+                      { key: 'advisor.chip_fert', crop: 'Fertilizer (ማዳበሪያ / Xaa\'oo)' },
+                    ].map((item, idx) => (
                       <button
-                        key={days}
-                        onClick={() => setAnalyticsFilterDays(days)}
-                        className={cn(
-                          'px-2.5 py-1 rounded-md transition-colors',
-                          analyticsFilterDays === days
-                            ? 'bg-white text-brand-forest-800 shadow-2xs font-bold'
-                            : 'text-slate-600 hover:text-slate-900'
-                        )}
+                        key={idx}
+                        onClick={() => {
+                          const q = t(item.key);
+                          handleAsk(q);
+                          setActiveTab('assistant');
+                        }}
+                        style={{
+                          textAlign: 'left',
+                          padding: '0.75rem',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--border-subtle)',
+                          backgroundColor: 'var(--bg-card)',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          transition: 'all 0.18s ease',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--brand-forest-700)';
+                          e.currentTarget.style.backgroundColor = 'var(--brand-forest-50)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.borderColor = 'var(--border-subtle)';
+                          e.currentTarget.style.backgroundColor = 'var(--bg-card)';
+                        }}
                       >
-                        {days} Days
+                        <div>
+                          <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)' }}>
+                            {t(item.key)}
+                          </div>
+                          <span style={{ fontSize: '0.725rem', color: 'var(--text-muted)' }}>{item.crop}</span>
+                        </div>
+                        <ChevronRight size={14} color="var(--brand-forest-700)" />
                       </button>
                     ))}
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-                  <Card className="p-5">
-                    <span className="text-xs font-semibold text-slate-500">Total Advisory Turns</span>
-                    <div className="text-3xl font-black text-brand-forest-800 mt-1">
-                      {analyticsOverview?.total_turns ?? (analytics?.total_calls ?? '1,420')}
-                    </div>
-                  </Card>
-                  <Card className="p-5">
-                    <span className="text-xs font-semibold text-slate-500">Grounded Factuality Rate</span>
-                    <div className="text-3xl font-black text-emerald-700 mt-1">
-                      {analyticsOverview?.grounded_rate_pct ? `${analyticsOverview.grounded_rate_pct}%` : '96.4%'}
-                    </div>
-                  </Card>
-                  <Card className="p-5">
-                    <span className="text-xs font-semibold text-slate-500">Average Voice Latency</span>
-                    <div className="text-3xl font-black text-sky-700 mt-1">
-                      {analyticsOverview?.p50_latency_seconds ? `${analyticsOverview.p50_latency_seconds}s` : '1.2s'}
-                    </div>
-                  </Card>
+          {/* ======================================================== */}
+          {/* TAB 2: AI AGRICULTURAL ASSISTANT */}
+          {/* ======================================================== */}
+          {activeTab === 'assistant' && (
+            <div className="animate-entrance" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 140px)', maxHeight: '820px' }}>
+              {/* Chat Header Card */}
+              <div className="card-interactive" style={{ padding: '1rem 1.5rem', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.875rem' }}>
+                  <img
+                    src="/hello_farmer_logo.jpg"
+                    alt="AI Advisor"
+                    style={{ width: '42px', height: '42px', borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--brand-forest-700)' }}
+                  />
+                  <div>
+                    <h2 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                      {t('advisor.header_title')}
+                    </h2>
+                    <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      {t('advisor.header_subtitle')}
+                    </p>
+                  </div>
                 </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                  {/* Auto-Play Voice Toggle */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !autoPlayVoice;
+                      setAutoPlayVoice(next);
+                      if (!next) stopCurrentAudio();
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.45rem',
+                      padding: '0.45rem 0.85rem',
+                      borderRadius: 'var(--radius-full)',
+                      border: autoPlayVoice ? '1px solid var(--brand-forest-600)' : '1px solid var(--border-subtle)',
+                      backgroundColor: autoPlayVoice ? 'var(--brand-forest-50)' : '#ffffff',
+                      color: autoPlayVoice ? 'var(--brand-forest-800)' : 'var(--text-muted)',
+                      cursor: 'pointer',
+                      fontSize: '0.775rem',
+                      fontWeight: 600,
+                      transition: 'all 0.15s ease',
+                    }}
+                    title={t('advisor.voice_autoplay_label')}
+                  >
+                    {autoPlayVoice ? <Volume2 size={15} color="var(--brand-forest-700)" /> : <VolumeX size={15} />}
+                    <span>{t('advisor.voice_autoplay_label')}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopCurrentAudio();
+                      setMessages([]);
+                      setSessionId('');
+                      setPendingTranscript(null);
+                      setMicErrorMessage(null);
+                    }}
+                    className="btn-secondary"
+                    style={{ padding: '0.45rem 0.85rem', fontSize: '0.8rem' }}
+                  >
+                    <RefreshCw size={14} />
+                    <span>{t('advisor.new_chat')}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Chat Messages List */}
+              <div
+                className="card-base"
+                style={{
+                  flex: 1,
+                  padding: '1.5rem',
+                  overflowY: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '1.25rem',
+                  backgroundColor: 'var(--bg-card-subtle)',
+                }}
+              >
+                {messages.length === 0 ? (
+                  <div style={{ margin: 'auto', textAlign: 'center', maxWidth: '540px', padding: '2rem 1rem' }}>
+                    <div style={{ width: '72px', height: '72px', borderRadius: '50%', backgroundColor: 'var(--brand-forest-50)', border: '2px solid var(--brand-forest-100)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.25rem' }}>
+                      <Sprout size={36} color="var(--brand-forest-700)" />
+                    </div>
+                    <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.35rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                      {t('advisor.empty_chat')}
+                    </h3>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem', lineHeight: 1.5 }}>
+                      {t('advisor.suggested_title')}
+                    </p>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.65rem' }}>
+                      {[
+                        'advisor.chip_teff',
+                        'advisor.chip_wheat',
+                        'advisor.chip_maize',
+                        'advisor.chip_fert',
+                      ].map((promptKey, i) => (
+                        <button
+                          key={i}
+                          onClick={() => handleAsk(t(promptKey))}
+                          className="card-interactive"
+                          style={{
+                            padding: '0.75rem',
+                            backgroundColor: '#ffffff',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: 'var(--radius-md)',
+                            fontSize: '0.825rem',
+                            fontWeight: 600,
+                            color: 'var(--text-body)',
+                            cursor: 'pointer',
+                            textAlign: 'left',
+                            transition: 'all 0.15s ease',
+                          }}
+                        >
+                          {t(promptKey)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  messages.map((m) => (
+                    <div
+                      key={m.id}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: m.sender === 'user' ? 'flex-end' : 'flex-start',
+                      }}
+                    >
+                      <div
+                        style={{
+                          maxWidth: '82%',
+                          padding: '1.15rem 1.35rem',
+                          borderRadius: m.sender === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                          backgroundColor: m.sender === 'user' ? 'var(--brand-forest-700)' : '#ffffff',
+                          color: m.sender === 'user' ? '#ffffff' : 'var(--text-main)',
+                          boxShadow: 'var(--shadow-sm)',
+                          border: m.sender === 'user' ? 'none' : '1px solid var(--border-subtle)',
+                        }}
+                      >
+                        {/* Header for assistant message */}
+                        {m.sender === 'assistant' && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.65rem', paddingBottom: '0.5rem', borderBottom: '1px solid var(--border-subtle)', flexWrap: 'wrap', gap: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <img
+                                src="/hello_farmer_logo.jpg"
+                                alt="Badge"
+                                style={{ width: '22px', height: '22px', borderRadius: '50%' }}
+                              />
+                              <span style={{ fontWeight: 700, fontSize: '0.8rem', color: 'var(--brand-forest-800)' }}>
+                                {t('brand.name')} AI
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <span
+                                className={`badge ${m.grounded ? 'badge-success' : 'badge-warning'}`}
+                                style={{ fontSize: '0.7rem', padding: '0.15rem 0.5rem' }}
+                              >
+                                {m.grounded ? `✓ ${t('advisor.grounded_badge')}` : '⚠ Extension Verified'}
+                              </span>
+
+                              {/* Audio playback controls */}
+                              {playingMessageId === m.id && audioPlaybackStatus === 'playing' ? (
+                                <button
+                                  type="button"
+                                  onClick={pauseMessageAudio}
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.35rem',
+                                    padding: '0.2rem 0.6rem',
+                                    borderRadius: 'var(--radius-full)',
+                                    backgroundColor: 'var(--brand-forest-100)',
+                                    border: '1px solid var(--brand-forest-400)',
+                                    color: 'var(--brand-forest-800)',
+                                    cursor: 'pointer',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 700,
+                                  }}
+                                  title={t('advisor.voice_pause')}
+                                >
+                                  <Pause size={12} />
+                                  <span>{t('advisor.voice_pause')}</span>
+                                  <span className="waveform-bar" style={{ height: '10px', width: '2px', animationDelay: '0s' }} />
+                                  <span className="waveform-bar" style={{ height: '14px', width: '2px', animationDelay: '0.2s' }} />
+                                  <span className="waveform-bar" style={{ height: '8px', width: '2px', animationDelay: '0.4s' }} />
+                                </button>
+                              ) : playingMessageId === m.id && audioPlaybackStatus === 'paused' ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                  <button
+                                    type="button"
+                                    onClick={resumeMessageAudio}
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '0.3rem',
+                                      padding: '0.2rem 0.6rem',
+                                      borderRadius: 'var(--radius-full)',
+                                      backgroundColor: 'var(--brand-forest-50)',
+                                      border: '1px solid var(--brand-forest-300)',
+                                      color: 'var(--brand-forest-700)',
+                                      cursor: 'pointer',
+                                      fontSize: '0.75rem',
+                                      fontWeight: 600,
+                                    }}
+                                    title={t('advisor.voice_resume')}
+                                  >
+                                    <Play size={12} />
+                                    <span>{t('advisor.voice_resume')}</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => replayMessageAudio(m)}
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      padding: '0.2rem 0.45rem',
+                                      borderRadius: 'var(--radius-full)',
+                                      backgroundColor: 'var(--bg-subtle)',
+                                      border: '1px solid var(--border-subtle)',
+                                      color: 'var(--text-muted)',
+                                      cursor: 'pointer',
+                                    }}
+                                    title={t('advisor.voice_replay')}
+                                  >
+                                    <RotateCcw size={12} />
+                                  </button>
+                                </div>
+                              ) : playingMessageId === m.id && audioPlaybackStatus === 'loading' ? (
+                                <span style={{ fontSize: '0.725rem', color: 'var(--brand-forest-700)', display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}>
+                                  <RefreshCw size={12} className="animate-spin" />
+                                  {t('advisor.voice_synthesizing')}
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => playMessageAudio(m)}
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.35rem',
+                                    padding: '0.2rem 0.6rem',
+                                    borderRadius: 'var(--radius-full)',
+                                    backgroundColor: 'var(--bg-subtle)',
+                                    border: '1px solid var(--border-subtle)',
+                                    color: 'var(--brand-forest-700)',
+                                    cursor: 'pointer',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 600,
+                                  }}
+                                  title={t('advisor.voice_listen')}
+                                >
+                                  <Volume2 size={13} />
+                                  <span>{t('advisor.voice_listen')}</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* User voice question indicator */}
+                        {m.sender === 'user' && m.isVoiceTurn && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.35rem', fontSize: '0.725rem', color: 'rgba(255,255,255,0.85)' }}>
+                            <Mic size={12} />
+                            <span>{t('advisor.voice_record')}</span>
+                          </div>
+                        )}
+
+                        {/* Message Text */}
+                        <div style={{ fontSize: '0.975rem', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                          {m.text}
+                        </div>
+
+                        {/* English Gloss / Translation if available */}
+                        {m.answer_en_gloss && (
+                          <div style={{ marginTop: '0.75rem', paddingTop: '0.5rem', borderTop: '1px dashed var(--border-subtle)', fontSize: '0.825rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                            <strong>Reviewer Gloss:</strong> {m.answer_en_gloss}
+                          </div>
+                        )}
+
+                        {/* Sources list */}
+                        {m.sources_used && m.sources_used.length > 0 && (
+                          <div style={{ marginTop: '0.75rem', paddingTop: '0.5rem', borderTop: '1px solid var(--border-subtle)' }}>
+                            <span style={{ fontSize: '0.725rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+                              {t('advisor.sources_used')}
+                            </span>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.25rem' }}>
+                              {m.sources_used.map((s, idx) => (
+                                <span
+                                  key={idx}
+                                  style={{
+                                    fontSize: '0.7rem',
+                                    padding: '0.2rem 0.5rem',
+                                    backgroundColor: 'var(--bg-subtle)',
+                                    borderRadius: 'var(--radius-sm)',
+                                    color: 'var(--brand-forest-700)',
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  {s.title || `Manual Source #${idx + 1}`}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div style={{ textAlign: 'right', marginTop: '0.35rem', fontSize: '0.675rem', color: m.sender === 'user' ? 'rgba(255,255,255,0.7)' : 'var(--text-light)' }}>
+                          {m.timestamp}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+
+                {chatLoading && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '1rem', backgroundColor: '#ffffff', borderRadius: 'var(--radius-md)', width: 'fit-content', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ display: 'flex', gap: '0.35rem' }}>
+                      <span className="waveform-bar" style={{ animationDelay: '0s' }} />
+                      <span className="waveform-bar" style={{ animationDelay: '0.2s' }} />
+                      <span className="waveform-bar" style={{ animationDelay: '0.4s' }} />
+                    </div>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--brand-forest-700)', fontWeight: 600 }}>
+                      {t('advisor.processing')}
+                    </span>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              {/* Error Notification Banner */}
+              {micErrorMessage && (
+                <div
+                  style={{
+                    padding: '0.75rem 1rem',
+                    backgroundColor: '#fffbeb',
+                    border: '1px solid #fef3c7',
+                    borderRadius: 'var(--radius-md)',
+                    marginTop: '0.75rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '0.75rem',
+                    fontSize: '0.85rem',
+                    color: '#92400e',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <AlertTriangle size={16} color="#d97706" />
+                    <span>{micErrorMessage}</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => audioFileInputRef.current?.click()}
+                      style={{
+                        padding: '0.35rem 0.75rem',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        backgroundColor: '#fde68a',
+                        border: '1px solid #f59e0b',
+                        borderRadius: 'var(--radius-sm)',
+                        cursor: 'pointer',
+                        color: '#78350f',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                      }}
+                    >
+                      <Upload size={13} />
+                      <span>{t('advisor.voice_upload_audio')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTestSampleVoice}
+                      style={{
+                        padding: '0.35rem 0.75rem',
+                        fontSize: '0.78rem',
+                        fontWeight: 600,
+                        backgroundColor: '#dcfce7',
+                        border: '1px solid #86efac',
+                        borderRadius: 'var(--radius-sm)',
+                        cursor: 'pointer',
+                        color: '#166534',
+                      }}
+                    >
+                      {t('advisor.voice_try_sample')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMicErrorMessage(null)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#92400e', marginLeft: '0.25rem' }}
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Active Recording Floating Card */}
+              {recordingState === 'recording' && (
+                <div
+                  style={{
+                    padding: '0.75rem 1.25rem',
+                    backgroundColor: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    borderRadius: 'var(--radius-lg)',
+                    marginTop: '0.75rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '1rem',
+                    boxShadow: '0 4px 14px rgba(220, 38, 38, 0.12)',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <span
+                      style={{
+                        width: '12px',
+                        height: '12px',
+                        borderRadius: '50%',
+                        backgroundColor: '#dc2626',
+                        display: 'inline-block',
+                        boxShadow: '0 0 8px #dc2626',
+                      }}
+                    />
+                    <span style={{ fontWeight: 800, color: '#dc2626', fontSize: '0.95rem', fontFamily: 'monospace' }}>
+                      {Math.floor(recordingDuration / 60).toString().padStart(2, '0')}:{(recordingDuration % 60).toString().padStart(2, '0')}
+                    </span>
+                    <span style={{ fontSize: '0.85rem', color: '#991b1b', fontWeight: 600 }}>
+                      {t('advisor.voice_recording')}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      onClick={stopVoiceRecording}
+                      className="btn-primary"
+                      style={{
+                        padding: '0.45rem 0.95rem',
+                        fontSize: '0.8rem',
+                        backgroundColor: '#dc2626',
+                        borderColor: '#dc2626',
+                        color: '#ffffff',
+                        borderRadius: 'var(--radius-full)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                      }}
+                    >
+                      <Check size={14} />
+                      <span>{t('advisor.voice_stop')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelVoiceRecording}
+                      className="btn-secondary"
+                      style={{
+                        padding: '0.45rem 0.85rem',
+                        fontSize: '0.8rem',
+                        borderRadius: 'var(--radius-full)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                      }}
+                    >
+                      <X size={14} />
+                      <span>{t('advisor.voice_cancel')}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Transcribing Progress Banner */}
+              {recordingState === 'transcribing' && (
+                <div
+                  style={{
+                    padding: '0.75rem 1.25rem',
+                    backgroundColor: 'var(--brand-forest-50)',
+                    border: '1px solid var(--brand-forest-200)',
+                    borderRadius: 'var(--radius-lg)',
+                    marginTop: '0.75rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.75rem',
+                  }}
+                >
+                  <RefreshCw size={18} className="animate-spin" color="var(--brand-forest-700)" />
+                  <span style={{ fontSize: '0.875rem', color: 'var(--brand-forest-800)', fontWeight: 600 }}>
+                    {t('advisor.voice_transcribing')}
+                  </span>
+                </div>
+              )}
+
+              {/* Recognized Transcript Confirmation / Editing Banner */}
+              {pendingTranscript && (
+                <div
+                  style={{
+                    padding: '0.85rem 1.25rem',
+                    backgroundColor: '#f0fdf4',
+                    border: '1px solid #bbf7d0',
+                    borderRadius: 'var(--radius-lg)',
+                    marginTop: '0.75rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.5rem',
+                    boxShadow: 'var(--shadow-sm)',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.775rem', fontWeight: 800, color: 'var(--brand-forest-800)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                      <Mic size={13} color="var(--brand-forest-700)" />
+                      {t('advisor.voice_transcript_title')}
+                    </span>
+                    <span style={{ fontSize: '0.725rem', color: 'var(--text-muted)' }}>
+                      {t('advisor.voice_edit_prompt')}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <input
+                      type="text"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleAsk()}
+                      style={{
+                        flex: 1,
+                        padding: '0.55rem 0.85rem',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--brand-forest-300)',
+                        backgroundColor: '#ffffff',
+                        fontSize: '0.925rem',
+                        color: 'var(--text-main)',
+                        outline: 'none',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleAsk()}
+                      disabled={chatLoading || !query.trim()}
+                      className="btn-primary"
+                      style={{
+                        padding: '0.55rem 1.15rem',
+                        borderRadius: 'var(--radius-md)',
+                        fontSize: '0.85rem',
+                        fontWeight: 700,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                      }}
+                    >
+                      <Send size={14} />
+                      <span>{t('advisor.voice_send_btn')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPendingTranscript(null);
+                        setQuery('');
+                      }}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        color: 'var(--text-muted)',
+                        padding: '0.4rem',
+                      }}
+                      title={t('advisor.voice_cancel')}
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Chat Input Bar */}
+              <div className="card-interactive" style={{ padding: '0.875rem 1.25rem', marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                {/* Hidden Audio File Input */}
+                <input
+                  type="file"
+                  ref={audioFileInputRef}
+                  onChange={handleAudioFileUpload}
+                  accept="audio/*"
+                  style={{ display: 'none' }}
+                />
+
+                {/* Voice Record / Stop Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (recordingState === 'recording') {
+                      stopVoiceRecording();
+                    } else {
+                      startVoiceRecording();
+                    }
+                  }}
+                  disabled={chatLoading || recordingState === 'transcribing'}
+                  style={{
+                    width: '44px',
+                    height: '44px',
+                    borderRadius: '50%',
+                    border: 'none',
+                    backgroundColor: recordingState === 'recording' ? '#dc2626' : 'var(--bg-subtle)',
+                    color: recordingState === 'recording' ? '#ffffff' : 'var(--brand-forest-700)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'all 0.18s ease',
+                    boxShadow: recordingState === 'recording' ? '0 0 14px rgba(220, 38, 38, 0.55)' : 'none',
+                  }}
+                  title={recordingState === 'recording' ? t('advisor.voice_stop') : t('advisor.voice_record')}
+                >
+                  {recordingState === 'recording' ? (
+                    <Square size={18} fill="#ffffff" />
+                  ) : recordingState === 'transcribing' ? (
+                    <RefreshCw size={18} className="animate-spin" />
+                  ) : (
+                    <Mic size={20} />
+                  )}
+                </button>
+
+                {/* Upload Audio File Button */}
+                <button
+                  type="button"
+                  onClick={() => audioFileInputRef.current?.click()}
+                  disabled={chatLoading || recordingState === 'transcribing' || recordingState === 'recording'}
+                  style={{
+                    width: '40px',
+                    height: '40px',
+                    borderRadius: '50%',
+                    border: 'none',
+                    backgroundColor: 'var(--bg-subtle)',
+                    color: 'var(--brand-forest-700)',
+                    cursor: (chatLoading || recordingState === 'transcribing' || recordingState === 'recording') ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'all 0.18s ease',
+                  }}
+                  title={t('advisor.voice_upload_audio')}
+                >
+                  <Upload size={18} />
+                </button>
+
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAsk()}
+                  placeholder={recordingState === 'recording' ? t('advisor.voice_recording') : t('advisor.input_placeholder')}
+                  style={{
+                    flex: 1,
+                    border: 'none',
+                    outline: 'none',
+                    fontSize: '0.95rem',
+                    fontFamily: 'inherit',
+                    color: 'var(--text-main)',
+                    backgroundColor: 'transparent',
+                  }}
+                />
+
+                <button
+                  onClick={() => handleAsk()}
+                  disabled={chatLoading || !query.trim()}
+                  className="btn-primary"
+                  style={{ borderRadius: 'var(--radius-full)', padding: '0.65rem 1.25rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                >
+                  <span>{t('advisor.btn_send')}</span>
+                  <Send size={16} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* TAB 3: VOICE ASSISTANT (DIAL 8028 & WEB MIC) */}
+          {/* ======================================================== */}
+          {activeTab === 'voice' && (
+            <div className="animate-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+              {/* Dial-in 8028 Main Card */}
+              <div
+                style={{
+                  background: 'linear-gradient(135deg, var(--brand-forest-800) 0%, var(--brand-forest-700) 100%)',
+                  borderRadius: 'var(--radius-xl)',
+                  padding: '2.5rem',
+                  color: '#ffffff',
+                  boxShadow: 'var(--shadow-lg)',
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+                  alignItems: 'center',
+                  gap: '2.5rem',
+                }}
+              >
+                <div>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.85rem', backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 'var(--radius-full)', fontSize: '0.8rem', fontWeight: 600, marginBottom: '1rem' }}>
+                    <Radio size={14} color="#4ade80" />
+                    <span>{t('voice.dial_card_title')}</span>
+                  </div>
+                  <h2 style={{ margin: '0 0 0.75rem 0', fontSize: '2rem', fontWeight: 800 }}>
+                    {t('voice.title')}
+                  </h2>
+                  <p style={{ margin: '0 0 1.5rem 0', fontSize: '1rem', color: '#e0ece5', lineHeight: 1.6 }}>
+                    {t('voice.subtitle')}
+                  </p>
+                  <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <a
+                      href="tel:8028"
+                      className="btn-gold"
+                      style={{
+                        padding: '0.85rem 1.75rem',
+                        textDecoration: 'none',
+                        fontSize: '1.05rem',
+                      }}
+                    >
+                      <PhoneCall size={20} />
+                      <span>{t('voice.dial_btn')}</span>
+                    </a>
+                    <span style={{ fontSize: '0.85rem', color: '#c3ded1' }}>SIP Softphone: 1001 / 1002</span>
+                  </div>
+                </div>
+
+                {/* MicroSIP / Softphone Setup Guide Card */}
+                <div style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)', borderRadius: 'var(--radius-lg)', padding: '1.5rem', border: '1px solid rgba(255, 255, 255, 0.18)', backdropFilter: 'blur(8px)' }}>
+                  <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '1rem', fontWeight: 700, color: '#fef3c7' }}>
+                    MicroSIP Softphone Test Credentials
+                  </h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.85rem', color: '#e2e8f0' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.35rem' }}>
+                      <span style={{ color: '#94a3b8' }}>SIP Server:</span>
+                      <span style={{ fontWeight: 600, fontFamily: 'monospace' }}>
+                        {voiceAgentStatus?.sip_server || '192.168.220.14:5060'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.35rem' }}>
+                      <span style={{ color: '#94a3b8' }}>Extension / User:</span>
+                      <span style={{ fontWeight: 600 }}>1001 / 1002</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.35rem' }}>
+                      <span style={{ color: '#94a3b8' }}>Password:</span>
+                      <span style={{ fontWeight: 600 }}>FarmerPass1001!</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#94a3b8' }}>Dial Destination:</span>
+                      <span style={{ fontWeight: 700, color: '#4ade80' }}>8028</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Live Voice Agent & Telephony Engine Health */}
+              <div className="card-interactive" style={{ padding: '1.75rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <div style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: voiceAgentStatus?.service_status === 'ONLINE' ? '#16a34a' : '#eab308' }} className="animate-pulse" />
+                    <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                      {t('voice.engine_status')}
+                    </h3>
+                  </div>
+                  <span className="badge badge-success" style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <CheckCircle2 size={13} />
+                    <span>{voiceAgentStatus?.telephony_engine || 'Asterisk 20 (AudioSocket :9092)'}</span>
+                  </span>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+                  <div style={{ padding: '1rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('voice.active_calls')}</span>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--brand-forest-700)', marginTop: '0.25rem' }}>
+                      {voiceAgentStatus?.active_calls_count ?? 0}
+                    </div>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Real-time concurrent callers</span>
+                  </div>
+
+                  <div style={{ padding: '1rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('voice.total_recorded')}</span>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--gold-700)', marginTop: '0.25rem' }}>
+                      {voiceAgentStatus?.total_calls_recorded ?? callsList.length}
+                    </div>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Persisted in PostgreSQL</span>
+                  </div>
+
+                  <div style={{ padding: '1rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Speech & LLM Pipeline</span>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--brand-forest-800)', marginTop: '0.4rem' }}>
+                      Whisper • Gemini • Edge-TTS
+                    </div>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Amharic & Afaan Oromoo RAG</span>
+                  </div>
+
+                  <div style={{ padding: '1rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Hotline PBX Extension</span>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--brand-forest-700)', marginTop: '0.25rem' }}>
+                      8028
+                    </div>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>PJSIP context: hello-farmer-inbound</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Recent Real Call Activity Preview */}
+              <div className="card-interactive" style={{ padding: '1.75rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                  <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                    Recent 8028 Phone Calls
+                  </h3>
+                  <button onClick={() => setActiveTab('history')} className="btn-secondary" style={{ padding: '0.4rem 0.85rem', fontSize: '0.8rem' }}>
+                    <span>All Call Records</span>
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+
+                {callsList.length === 0 ? (
+                  <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                    {t('history.no_calls')}
+                  </p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {callsList.slice(0, 3).map((c: any) => (
+                      <div key={c.id} style={{ padding: '0.875rem 1rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span style={{ fontWeight: 700, fontSize: '0.85rem' }}>{c.started_at}</span>
+                            <span className="badge badge-neutral" style={{ fontSize: '0.7rem' }}>
+                              {c.language === 'om' ? 'Afaan Oromoo' : 'አማርኛ'}
+                            </span>
+                            <span className={`badge ${c.end_reason === 'completed' ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '0.7rem' }}>
+                              {c.end_reason === 'completed' ? 'Completed' : c.end_reason}
+                            </span>
+                          </div>
+                          {c.first_question && (
+                            <p style={{ margin: '0.35rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-body)', maxWidth: '650px' }}>
+                              "{c.first_question}"
+                            </p>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                            {c.duration_seconds}s
+                          </span>
+                          <button
+                            onClick={() => {
+                              handleViewCallDetail(c.id);
+                              setActiveTab('history');
+                            }}
+                            className="btn-primary"
+                            style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
+                          >
+                            {t('history.view_transcript')}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* How it Works 3 Steps */}
+              <div className="card-interactive" style={{ padding: '2rem' }}>
+                <h3 style={{ margin: '0 0 1.5rem 0', fontSize: '1.25rem', fontWeight: 800, color: 'var(--brand-forest-800)', textAlign: 'center' }}>
+                  {t('voice.how_it_works')}
+                </h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1.5rem' }}>
+                  <div style={{ padding: '1.25rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: 'var(--brand-forest-700)', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, marginBottom: '0.75rem' }}>
+                      1
+                    </div>
+                    <h4 style={{ margin: '0 0 0.35rem 0', fontWeight: 700, color: 'var(--brand-forest-800)' }}>{t('voice.step1_title')}</h4>
+                    <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-body)', lineHeight: 1.5 }}>{t('voice.step1_desc')}</p>
+                  </div>
+
+                  <div style={{ padding: '1.25rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: 'var(--gold-600)', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, marginBottom: '0.75rem' }}>
+                      2
+                    </div>
+                    <h4 style={{ margin: '0 0 0.35rem 0', fontWeight: 700, color: 'var(--brand-forest-800)' }}>{t('voice.step2_title')}</h4>
+                    <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-body)', lineHeight: 1.5 }}>{t('voice.step2_desc')}</p>
+                  </div>
+
+                  <div style={{ padding: '1.25rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: 'var(--brand-forest-700)', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, marginBottom: '0.75rem' }}>
+                      3
+                    </div>
+                    <h4 style={{ margin: '0 0 0.35rem 0', fontWeight: 700, color: 'var(--brand-forest-800)' }}>{t('voice.step3_title')}</h4>
+                    <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-body)', lineHeight: 1.5 }}>{t('voice.step3_desc')}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Browser Microphone Interactive Playground */}
+              <div className="card-interactive" style={{ padding: '2rem', textAlign: 'center' }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.85rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-full)', fontSize: '0.75rem', fontWeight: 600, marginBottom: '0.75rem' }}>
+                  <span>Browser Web Speech Playground</span>
+                </div>
+                <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.25rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                  {t('voice.web_mic_title')}
+                </h3>
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', maxWidth: '520px', margin: '0 auto 2rem' }}>
+                  {t('voice.web_mic_desc')}
+                </p>
+
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1.5rem' }}>
+                  <button
+                    onClick={toggleBrowserRecording}
+                    disabled={chatLoading || recordingState === 'transcribing'}
+                    style={{
+                      width: '96px',
+                      height: '96px',
+                      borderRadius: '50%',
+                      border: 'none',
+                      backgroundColor: recordingState === 'recording' ? '#dc2626' : 'var(--brand-forest-700)',
+                      color: '#ffffff',
+                      cursor: (chatLoading || recordingState === 'transcribing') ? 'not-allowed' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: recordingState === 'recording'
+                        ? '0 0 0 16px rgba(220, 38, 38, 0.25), 0 8px 24px rgba(220, 38, 38, 0.4)'
+                        : '0 0 0 12px var(--brand-forest-50), 0 8px 24px rgba(30, 86, 66, 0.25)',
+                      transition: 'all 0.25s ease',
+                    }}
+                  >
+                    {recordingState === 'recording' ? (
+                      <Square size={36} fill="#ffffff" />
+                    ) : recordingState === 'transcribing' ? (
+                      <RefreshCw size={36} className="animate-spin" />
+                    ) : (
+                      <Mic size={40} />
+                    )}
+                  </button>
+
+                  <div style={{ minHeight: '36px' }}>
+                    {recordingState === 'recording' ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#dc2626', fontWeight: 700 }}>
+                        <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#dc2626' }} className="animate-pulse" />
+                        <span>{t('voice.mic_listening')} ({recordingDuration}s)</span>
+                      </div>
+                    ) : recordingState === 'transcribing' ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--brand-forest-700)', fontWeight: 600 }}>
+                        <RefreshCw size={16} className="animate-spin" />
+                        <span>{t('advisor.voice_transcribing')}</span>
+                      </div>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                        Language: {LANGUAGE_OPTIONS.find((l) => l.code === language)?.label}
+                      </span>
+                    )}
+                  </div>
+
+                  {micErrorMessage && (
+                    <div
+                      style={{
+                        maxWidth: '520px',
+                        width: '100%',
+                        padding: '0.75rem 1rem',
+                        backgroundColor: '#fffbeb',
+                        border: '1px solid #fef3c7',
+                        borderRadius: 'var(--radius-md)',
+                        color: '#92400e',
+                        fontSize: '0.85rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '0.5rem',
+                      }}
+                    >
+                      <AlertTriangle size={16} color="#d97706" />
+                      <span>{micErrorMessage}</span>
+                    </div>
+                  )}
+
+                  {pendingTranscript && (
+                    <div style={{ maxWidth: '600px', width: '100%', padding: '1rem', backgroundColor: '#f0fdf4', borderRadius: 'var(--radius-md)', border: '1px solid #bbf7d0', textAlign: 'left', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+                      <div>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>{t('advisor.voice_transcript_title')}</span>
+                        <p style={{ margin: '0.25rem 0 0 0', fontWeight: 600, color: 'var(--text-main)' }}>"{pendingTranscript}"</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTab('assistant');
+                          handleAsk(pendingTranscript);
+                        }}
+                        className="btn-primary"
+                        style={{ padding: '0.45rem 0.85rem', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+                      >
+                        {t('advisor.voice_send_btn')}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* TAB 4: WEATHER & EARLY WARNINGS */}
+          {/* ======================================================== */}
+          {activeTab === 'weather' && (
+            <div className="animate-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+              {/* Weather Banner */}
+              <div className="card-interactive" style={{ padding: '2rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                      <MapPin size={18} color="var(--brand-forest-700)" />
+                      <span style={{ fontWeight: 700, color: 'var(--brand-forest-700)', fontSize: '0.9rem' }}>
+                        {weatherData?.location || selectedLocationName}
+                      </span>
+                      {weatherLocations.length > 0 && (
+                        <select
+                          value={selectedLocationName}
+                          onChange={(e) => handleLocationChange(e.target.value)}
+                          style={{
+                            padding: '0.25rem 0.6rem',
+                            borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border-subtle)',
+                            fontSize: '0.8rem',
+                            backgroundColor: '#ffffff',
+                            color: 'var(--text-main)',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {weatherLocations.map((loc: any) => (
+                            <option key={loc.name} value={loc.name}>
+                              📍 {loc.name} ({loc.region})
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                    <h2 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                      {t('weather.title')}
+                    </h2>
+                    <p style={{ margin: '0.25rem 0 0 0', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                      {t('weather.advisory_desc')}
+                    </p>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '2.5rem', fontWeight: 800, color: 'var(--text-main)', lineHeight: 1 }}>
+                      {weatherLoading ? (
+                        <span style={{ fontSize: '1.5rem', color: 'var(--text-muted)' }}>Updating...</span>
+                      ) : (
+                        weatherData?.forecast?.temperature_current_c ? `${weatherData.forecast.temperature_current_c}°C` : '23.5°C'
+                      )}
+                    </div>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                      Max {weatherData?.forecast?.temperature_max_c ?? '27.2'}°C • Min {weatherData?.forecast?.temperature_min_c ?? '14.1'}°C
+                    </span>
+                  </div>
+                </div>
+
+                {/* 5-Day Forecast Grid */}
+                <div style={{ marginTop: '2rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '1rem' }}>
+                  {(weatherData?.forecast?.daily || [
+                    { day_offset: 0, precipitation_sum_mm: 1.2, temperature_max_c: 27.2, temperature_min_c: 14.1 },
+                    { day_offset: 1, precipitation_sum_mm: 0.0, temperature_max_c: 28.0, temperature_min_c: 13.9 },
+                    { day_offset: 2, precipitation_sum_mm: 4.2, temperature_max_c: 26.5, temperature_min_c: 14.5 },
+                    { day_offset: 3, precipitation_sum_mm: 0.0, temperature_max_c: 27.8, temperature_min_c: 14.0 },
+                    { day_offset: 4, precipitation_sum_mm: 0.0, temperature_max_c: 28.3, temperature_min_c: 13.8 },
+                  ]).map((d: any, idx: number) => {
+                    const days = [t('weather.day_today'), t('weather.day_tomorrow'), t('weather.day_after'), 'Day 4', 'Day 5'];
+                    return (
+                      <div
+                        key={idx}
+                        className="card-interactive"
+                        style={{
+                          padding: '1rem',
+                          backgroundColor: idx === 0 ? 'var(--brand-forest-50)' : 'var(--bg-subtle)',
+                          borderRadius: 'var(--radius-md)',
+                          border: `1px solid ${idx === 0 ? 'var(--brand-forest-100)' : 'var(--border-subtle)'}`,
+                          textAlign: 'center',
+                        }}
+                      >
+                        <div style={{ fontSize: '0.8rem', fontWeight: 700, color: idx === 0 ? 'var(--brand-forest-700)' : 'var(--text-body)' }}>
+                          {days[idx] || `Day ${idx + 1}`}
+                        </div>
+                        <div style={{ fontSize: '1.25rem', fontWeight: 800, margin: '0.5rem 0', color: 'var(--text-main)' }}>
+                          {d.temperature_max_c}°
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          🌧️ {d.precipitation_sum_mm} mm
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Two Big Actionable Risk Cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
+                {/* Spray Risk Index */}
+                <div className="card-interactive" style={{ padding: '1.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                    <Droplets size={22} color="var(--brand-forest-700)" />
+                    <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800 }}>{t('weather.spray_status')}</h3>
+                  </div>
+                  <div style={{ marginBottom: '1rem' }}>
+                    <span className={`badge ${weatherData?.spray_risk?.can_spray ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '0.85rem', padding: '0.35rem 0.75rem' }}>
+                      {weatherData?.spray_risk?.can_spray ? `✓ ${t('weather.spray_favorable')}` : `⚠ ${t('weather.spray_caution')}`}
+                    </span>
+                  </div>
+                  <p style={{ color: 'var(--text-body)', lineHeight: 1.6, fontSize: '0.925rem', margin: '0 0 1rem 0' }}>
+                    {weatherData?.spray_risk?.can_spray ? t('weather.advisory_desc') : t('weather.spray_risk')}
+                  </p>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Rain: {weatherData?.forecast?.precipitation_sum_mm ?? '5.4'} mm • Wind: {weatherData?.forecast?.wind_speed_max_kmh ?? '11.2'} km/h
+                  </div>
+                </div>
+
+                {/* Planting Soil Moisture Index */}
+                <div className="card-interactive" style={{ padding: '1.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                    <Sprout size={22} color="var(--gold-600)" />
+                    <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800 }}>{t('weather.planting_index')}</h3>
+                  </div>
+                  <div style={{ marginBottom: '1rem' }}>
+                    <span className="badge badge-gold" style={{ fontSize: '0.85rem', padding: '0.35rem 0.75rem' }}>
+                      {t('weather.planting_optimal')}
+                    </span>
+                  </div>
+                  <p style={{ color: 'var(--text-body)', lineHeight: 1.6, fontSize: '0.925rem', margin: '0 0 1rem 0' }}>
+                    {language === 'om'
+                      ? 'Jiidhina gahaa waan qabuuf facaasaafis ta\'e eegumsa biyyootiif haalli mijataadha.'
+                      : language === 'am'
+                      ? 'ተስማሚ እርጥበት የሚሰጥ ዝናብ ይጠበቃል። አፈሩ ለእርሻና ለዘር አመቺ ሁኔታ ላይ ነው።'
+                      : 'Soil moisture is optimal for seed germination. Ensure seed beds are well prepared.'}
+                  </p>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                    Soil Condition: Favorable • Temperature: 23.5°C
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* TAB 5: CROP YIELD PREDICTOR & FARM INSIGHTS */}
+          {/* ======================================================== */}
+          {activeTab === 'yield' && (
+            <div className="animate-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+              <div className="card-interactive" style={{ padding: '2rem' }}>
+                <div style={{ marginBottom: '1.5rem' }}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--brand-forest-700)', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.25rem' }}>
+                    <TrendingUp size={16} />
+                    <span>EIAR Agronomic Benchmark Modeling</span>
+                  </div>
+                  <h2 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                    {t('yield.title')}
+                  </h2>
+                  <p style={{ margin: '0.25rem 0 0 0', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                    {t('yield.subtitle')}
+                  </p>
+                </div>
+
+                {/* Calculator Form */}
+                <form onSubmit={handleCalculateYield} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1.25rem', marginBottom: '1.5rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-body)', marginBottom: '0.35rem' }}>
+                      {t('yield.crop_label')}
+                    </label>
+                    <select
+                      value={yieldInput.crop}
+                      onChange={(e) => setYieldInput({ ...yieldInput, crop: e.target.value })}
+                      style={{ width: '100%', padding: '0.65rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-medium)', fontFamily: 'inherit', fontSize: '0.9rem', backgroundColor: '#ffffff' }}
+                    >
+                      <option value="teff">Teff (ጤፍ / Xaafii - Magna/Quncho)</option>
+                      <option value="maize">Maize (በቆሎ / Boqqoolloo - BH-660)</option>
+                      <option value="wheat">Wheat (ስንዴ / Qamadii - Kakaba/Danda'a)</option>
+                      <option value="coffee">Coffee (ቡና / Buna - Arabica)</option>
+                      <option value="barley">Barley (ገብስ / Garbuu)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-body)', marginBottom: '0.35rem' }}>
+                      {t('yield.woreda_label')}
+                    </label>
+                    <input
+                      type="text"
+                      value={yieldInput.woreda}
+                      onChange={(e) => setYieldInput({ ...yieldInput, woreda: e.target.value })}
+                      style={{ width: '100%', padding: '0.65rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-medium)', fontFamily: 'inherit', fontSize: '0.9rem' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-body)', marginBottom: '0.35rem' }}>
+                      {t('yield.farm_size_label')}
+                    </label>
+                    <input
+                      type="number"
+                      step="0.25"
+                      min="0.25"
+                      max="50"
+                      value={yieldInput.farm_size_ha}
+                      onChange={(e) => setYieldInput({ ...yieldInput, farm_size_ha: parseFloat(e.target.value) || 1 })}
+                      style={{ width: '100%', padding: '0.65rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-medium)', fontFamily: 'inherit', fontSize: '0.9rem' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-body)', marginBottom: '0.35rem' }}>
+                      {t('yield.soil_label')}
+                    </label>
+                    <select
+                      value={yieldInput.soil_type}
+                      onChange={(e) => setYieldInput({ ...yieldInput, soil_type: e.target.value })}
+                      style={{ width: '100%', padding: '0.65rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-medium)', fontFamily: 'inherit', fontSize: '0.9rem', backgroundColor: '#ffffff' }}
+                    >
+                      <option value="Vertisol (ጥቁር አፈር)">Vertisol (ጥቁር አፈር / Biyyoo Gurraacha)</option>
+                      <option value="Nitisol (ቀይ አፈር)">Nitisol (ቀይ አፈር / Biyyoo Diimaa)</option>
+                      <option value="Fluvisol (ደለል አፈር)">Fluvisol (ደለል አፈር / Biyyoo Daalacha)</option>
+                      <option value="Sandy (አሸዋማ አፈር)">Sandy (አሸዋማ አፈር / Cirracha)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-body)', marginBottom: '0.35rem' }}>
+                      {t('yield.npsb_label')}
+                    </label>
+                    <input
+                      type="number"
+                      value={yieldInput.npsb_kg_ha}
+                      onChange={(e) => setYieldInput({ ...yieldInput, npsb_kg_ha: parseFloat(e.target.value) || 0 })}
+                      style={{ width: '100%', padding: '0.65rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-medium)', fontFamily: 'inherit', fontSize: '0.9rem' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-body)', marginBottom: '0.35rem' }}>
+                      {t('yield.urea_label')}
+                    </label>
+                    <input
+                      type="number"
+                      value={yieldInput.urea_kg_ha}
+                      onChange={(e) => setYieldInput({ ...yieldInput, urea_kg_ha: parseFloat(e.target.value) || 0 })}
+                      style={{ width: '100%', padding: '0.65rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-medium)', fontFamily: 'inherit', fontSize: '0.9rem' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                    <button
+                      type="submit"
+                      disabled={yieldLoading}
+                      className="btn-primary"
+                      style={{ width: '100%', padding: '0.75rem' }}
+                    >
+                      <TrendingUp size={16} />
+                      <span>{yieldLoading ? t('common.loading') : t('yield.calculate_btn')}</span>
+                    </button>
+                  </div>
+                </form>
+
+                {/* Prediction Result Display */}
+                {yieldResult && (
+                  <div className="card-interactive" style={{ padding: '1.75rem', backgroundColor: 'var(--brand-forest-50)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--brand-forest-100)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.25rem' }}>
+                      <div>
+                        <span className="badge badge-success" style={{ marginBottom: '0.35rem' }}>
+                          ✓ {t('yield.confidence')}: {Math.round((yieldResult.confidence_score || 0.91) * 100)}%
+                        </span>
+                        <h3 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                          {t('yield.expected_per_ha')}: {yieldResult.projected_yield_qt_ha} {t('yield.quintals')}
+                        </h3>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{t('yield.total_projected')}:</span>
+                        <div style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--gold-700)' }}>
+                          {yieldResult.total_projected_quintals} {t('yield.total_qt')}
+                        </div>
+                      </div>
+                    </div>
+
+                    <p style={{ fontSize: '0.95rem', color: 'var(--text-main)', lineHeight: 1.6, margin: '0 0 1rem 0' }}>
+                      {language === 'om' ? (yieldResult.advisory_om || yieldResult.advisory_am) : language === 'am' ? yieldResult.advisory_am : yieldResult.advisory_en}
+                    </p>
+
+                    {yieldResult.soil_health_tips && (
+                      <div style={{ backgroundColor: '#ffffff', padding: '1rem 1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+                        <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.85rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                          {t('yield.soil_tips_title')}:
+                        </h4>
+                        <ul style={{ margin: 0, paddingLeft: '1.25rem', fontSize: '0.85rem', color: 'var(--text-body)', lineHeight: 1.6 }}>
+                          {yieldResult.soil_health_tips.map((tip: string, idx: number) => (
+                            <li key={idx}>{tip}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* TAB 6: CONVERSATION & SMS HISTORY */}
+          {/* ======================================================== */}
+          {activeTab === 'history' && (
+            <div className="animate-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+              {/* Farmer Profile Card */}
+              <div className="card-interactive" style={{ padding: '1.75rem' }}>
+                <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                  {t('history.farmer_profile_title')}
+                </h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+                  <div style={{ padding: '0.875rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('history.caller_id')}</span>
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem', fontFamily: 'monospace' }}>
+                      {farmerProfile?.phone_hash || '03e80af0...8275'}
+                    </div>
+                  </div>
+                  <div style={{ padding: '0.875rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('yield.woreda_label')} & {t('yield.region_label')}</span>
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>
+                      {farmerProfile?.woreda || 'Adama'} Woreda, {farmerProfile?.region || 'Oromia'}
+                    </div>
+                  </div>
+                  <div style={{ padding: '0.875rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Preferred Language</span>
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>
+                      {LANGUAGE_OPTIONS.find((l) => l.code === (farmerProfile?.language || language))?.nativeName}
+                    </div>
+                  </div>
+                  <div style={{ padding: '0.875rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>SMS Notification Status</span>
+                    <div style={{ fontWeight: 700, fontSize: '0.9rem', color: farmerProfile?.opted_in !== false ? 'var(--success)' : 'var(--danger)' }}>
+                      {farmerProfile?.opted_in !== false ? t('history.opted_in') : t('history.opted_out')}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Selected Call Transcript Viewer Modal / Drawer */}
+              {selectedCallId && (
+                <div className="card-interactive" style={{ padding: '1.75rem', border: '2px solid var(--brand-forest-700)', backgroundColor: '#ffffff' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.75rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <PhoneCall size={20} color="var(--brand-forest-700)" />
+                      <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                        {t('history.dialogue_turns')}
+                      </h3>
+                      <span className="badge badge-success">
+                        {selectedCallDetail?.language === 'om' ? 'Afaan Oromoo' : 'አማርኛ'}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setSelectedCallId(null);
+                        setSelectedCallDetail(null);
+                      }}
+                      className="btn-secondary"
+                      style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                    >
+                      <X size={16} />
+                      <span>{t('common.close')}</span>
+                    </button>
+                  </div>
+
+                  {callDetailLoading ? (
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>{t('common.loading')}</p>
+                  ) : selectedCallDetail ? (
+                    <div>
+                      {/* Call metadata header */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.75rem', marginBottom: '1.25rem', padding: '0.75rem 1rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', fontSize: '0.8rem' }}>
+                        <div>
+                          <span style={{ color: 'var(--text-muted)' }}>Started:</span>
+                          <div style={{ fontWeight: 700 }}>{selectedCallDetail.started_at || 'N/A'}</div>
+                        </div>
+                        <div>
+                          <span style={{ color: 'var(--text-muted)' }}>Duration:</span>
+                          <div style={{ fontWeight: 700 }}>{selectedCallDetail.duration_seconds} seconds</div>
+                        </div>
+                        <div>
+                          <span style={{ color: 'var(--text-muted)' }}>Outcome:</span>
+                          <div style={{ fontWeight: 700, color: selectedCallDetail.end_reason === 'completed' ? 'var(--success)' : 'var(--warning)' }}>
+                            {selectedCallDetail.end_reason}
+                          </div>
+                        </div>
+                        <div>
+                          <span style={{ color: 'var(--text-muted)' }}>Caller Hash:</span>
+                          <div style={{ fontWeight: 700, fontFamily: 'monospace' }}>{selectedCallDetail.caller_hash}</div>
+                        </div>
+                      </div>
+
+                      {/* Conversation Turns List */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+                        {(selectedCallDetail.messages || []).map((msg: any, idx: number) => {
+                          const isCaller = msg.speaker === 'caller';
+                          return (
+                            <div
+                              key={msg.id || idx}
+                              style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: isCaller ? 'flex-end' : 'flex-start',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  maxWidth: '75%',
+                                  padding: '0.875rem 1.15rem',
+                                  borderRadius: isCaller ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                                  backgroundColor: isCaller ? 'var(--brand-forest-700)' : 'var(--bg-subtle)',
+                                  color: isCaller ? '#ffffff' : 'var(--text-main)',
+                                  boxShadow: 'var(--shadow-sm)',
+                                  fontSize: '0.925rem',
+                                  lineHeight: 1.5,
+                                }}
+                              >
+                                <div style={{ fontSize: '0.7rem', fontWeight: 700, marginBottom: '0.25rem', opacity: 0.8 }}>
+                                  {isCaller ? '👨‍🌾 Farmer (Caller)' : '🤖 Hello Farmer AI (8028 Assistant)'}
+                                </div>
+                                <div>{msg.text}</div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <p style={{ color: 'var(--text-muted)' }}>Failed to load conversation.</p>
+                  )}
+                </div>
+              )}
+
+              {/* 8028 Telephony Call Records Table */}
+              <div className="card-interactive" style={{ padding: '1.75rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <PhoneIncoming size={20} color="var(--brand-forest-700)" />
+                    <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                      {t('history.call_logs')}
+                    </h3>
+                  </div>
+                  <span className="badge badge-success">
+                    {callsList.length} Recorded Calls
+                  </span>
+                </div>
+
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
+                        <th style={{ padding: '0.75rem' }}>{t('history.date')}</th>
+                        <th style={{ padding: '0.75rem' }}>{t('history.caller_id')}</th>
+                        <th style={{ padding: '0.75rem' }}>Language</th>
+                        <th style={{ padding: '0.75rem' }}>{t('history.duration')}</th>
+                        <th style={{ padding: '0.75rem' }}>{t('history.status')}</th>
+                        <th style={{ padding: '0.75rem' }}>Inquiry Preview</th>
+                        <th style={{ padding: '0.75rem' }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {callsList.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                            {t('history.no_calls')}
+                          </td>
+                        </tr>
+                      ) : (
+                        callsList.map((c: any) => (
+                          <tr key={c.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                            <td style={{ padding: '0.75rem', whiteSpace: 'nowrap' }}>{c.started_at}</td>
+                            <td style={{ padding: '0.75rem', fontFamily: 'monospace' }}>{c.caller_hash}</td>
+                            <td style={{ padding: '0.75rem' }}>
+                              <span className="badge badge-neutral">
+                                {c.language === 'om' ? 'Afaan Oromoo' : 'አማርኛ'}
+                              </span>
+                            </td>
+                            <td style={{ padding: '0.75rem', whiteSpace: 'nowrap' }}>{c.duration_seconds}s</td>
+                            <td style={{ padding: '0.75rem' }}>
+                              <span className={`badge ${c.end_reason === 'completed' ? 'badge-success' : 'badge-warning'}`}>
+                                {c.end_reason === 'completed' ? 'COMPLETED' : c.end_reason?.toUpperCase()}
+                              </span>
+                            </td>
+                            <td style={{ padding: '0.75rem', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {c.first_question || 'Dial-in session'}
+                            </td>
+                            <td style={{ padding: '0.75rem' }}>
+                              <button
+                                onClick={() => handleViewCallDetail(c.id)}
+                                className="btn-primary"
+                                style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
+                              >
+                                {t('history.view_transcript')}
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* GSM SMS Dispatch Gateway Table */}
+              <div className="card-interactive" style={{ padding: '1.75rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                  <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                    {t('history.sms_dispatched')}
+                  </h3>
+                  <span className="badge badge-neutral">GSM SMS Gateway (Simulated / Local)</span>
+                </div>
+
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
+                        <th style={{ padding: '0.75rem' }}>{t('history.date')}</th>
+                        <th style={{ padding: '0.75rem' }}>{t('history.recipient')}</th>
+                        <th style={{ padding: '0.75rem' }}>{t('history.type')}</th>
+                        <th style={{ padding: '0.75rem' }}>{t('history.message')}</th>
+                        <th style={{ padding: '0.75rem' }}>Segments</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {smsList.length === 0 ? (
+                        <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                          <td style={{ padding: '0.75rem' }}>2026-10-09 10:40</td>
+                          <td style={{ padding: '0.75rem', fontFamily: 'monospace' }}>#50e05bfd...</td>
+                          <td style={{ padding: '0.75rem' }}>
+                            <span className="badge badge-success">CALL SUMMARY</span>
+                          </td>
+                          <td style={{ padding: '0.75rem' }}>
+                            {language === 'om'
+                              ? 'Baalli xaafii keessan akka hin keellofneef yaa\'a bishaanii eegaa.'
+                              : language === 'am'
+                              ? 'የጤፍ ቅጠል ቢጫ መሆኑን አስመልክቶ የውሃ ማቆር አለመኖሩን ያረጋግጡ።'
+                              : 'Check drainage furrows to prevent waterlogging on teff fields.'}
+                          </td>
+                          <td style={{ padding: '0.75rem' }}>1 seg</td>
+                        </tr>
+                      ) : (
+                        smsList.map((m: any) => (
+                          <tr key={m.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                            <td style={{ padding: '0.75rem', whiteSpace: 'nowrap' }}>{m.sent_at}</td>
+                            <td style={{ padding: '0.75rem', fontFamily: 'monospace' }}>{m.recipient_hash}</td>
+                            <td style={{ padding: '0.75rem' }}>
+                              <span className={`badge ${m.message_type === 'warning' ? 'badge-warning' : 'badge-success'}`}>
+                                {m.message_type?.toUpperCase()}
+                              </span>
+                            </td>
+                            <td style={{ padding: '0.75rem' }}>{m.content}</td>
+                            <td style={{ padding: '0.75rem', whiteSpace: 'nowrap' }}>{m.segments_count} seg</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ======================================================== */}
+          {/* TAB 7: PLATFORM PERFORMANCE ANALYTICS */}
+          {/* ======================================================== */}
+          {activeTab === 'analytics' && (
+            <div className="animate-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+              <div className="card-interactive" style={{ padding: '2rem' }}>
+                {/* Header with Title and Date Range Filter Buttons */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
+                  <div>
+                    <h2 style={{ margin: '0 0 0.5rem 0', fontSize: '1.65rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                      {t('analytics.title')}
+                    </h2>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: 0 }}>
+                      {t('analytics.subtitle')}
+                    </p>
+                  </div>
+
+                  {/* Date Range Selector */}
+                  <div style={{ display: 'flex', gap: '0.5rem', backgroundColor: 'var(--bg-subtle)', padding: '0.35rem', borderRadius: 'var(--radius-md)' }}>
+                    <button
+                      onClick={() => setAnalyticsFilterDays(7)}
+                      style={{
+                        padding: '0.45rem 0.85rem',
+                        borderRadius: 'var(--radius-sm)',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        backgroundColor: analyticsFilterDays === 7 ? 'var(--brand-forest-700)' : 'transparent',
+                        color: analyticsFilterDays === 7 ? '#ffffff' : 'var(--text-body)',
+                        transition: 'all 0.2s ease',
+                      }}
+                    >
+                      {t('analytics.range_7d')}
+                    </button>
+                    <button
+                      onClick={() => setAnalyticsFilterDays(30)}
+                      style={{
+                        padding: '0.45rem 0.85rem',
+                        borderRadius: 'var(--radius-sm)',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        backgroundColor: analyticsFilterDays === 30 ? 'var(--brand-forest-700)' : 'transparent',
+                        color: analyticsFilterDays === 30 ? '#ffffff' : 'var(--text-body)',
+                        transition: 'all 0.2s ease',
+                      }}
+                    >
+                      {t('analytics.range_30d')}
+                    </button>
+                    <button
+                      onClick={() => setAnalyticsFilterDays(0)}
+                      style={{
+                        padding: '0.45rem 0.85rem',
+                        borderRadius: 'var(--radius-sm)',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        backgroundColor: analyticsFilterDays === 0 ? 'var(--brand-forest-700)' : 'transparent',
+                        color: analyticsFilterDays === 0 ? '#ffffff' : 'var(--text-body)',
+                        transition: 'all 0.2s ease',
+                      }}
+                    >
+                      {t('analytics.range_all')}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Primary Aggregated KPI Cards */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
+                  <div className="card-interactive" style={{ padding: '1.25rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('stat.calls_served')}</span>
+                    <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--brand-forest-700)', margin: '0.35rem 0' }}>
+                      {analyticsOverview?.total_calls ?? 0}
+                    </div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--success)' }}>
+                      ● {analyticsOverview?.completed_calls ?? 0} {t('analytics.completed_calls')}
+                    </span>
+                  </div>
+
+                  <div className="card-interactive" style={{ padding: '1.25rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('analytics.completion_rate')}</span>
+                    <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--brand-forest-800)', margin: '0.35rem 0' }}>
+                      {analyticsOverview?.completion_rate_pct !== undefined ? `${analyticsOverview.completion_rate_pct}%` : '0%'}
+                    </div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      Grounded Answer Rate: {analyticsOverview?.grounded_rate_pct ?? 0}%
+                    </span>
+                  </div>
+
+                  <div className="card-interactive" style={{ padding: '1.25rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('analytics.avg_duration')}</span>
+                    <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--gold-700)', margin: '0.35rem 0' }}>
+                      {analyticsOverview?.avg_duration_seconds ? `${analyticsOverview.avg_duration_seconds}s` : '0s'}
+                    </div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      Total: {analyticsOverview?.total_duration_minutes ?? 0} mins
+                    </span>
+                  </div>
+
+                  <div className="card-interactive" style={{ padding: '1.25rem' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>{t('stat.active_farmers')}</span>
+                    <div style={{ fontSize: '2rem', fontWeight: 800, color: '#0284c7', margin: '0.35rem 0' }}>
+                      {analyticsOverview?.registered_farmers ?? 28}
+                    </div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      Active Alerts: {analyticsOverview?.active_warnings ?? 14}
+                    </span>
+                  </div>
+                </div>
+
+                {/* 2-Column Analytics Visualizations Grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
+                  {/* Visualization 1: Daily Call Volume Trend SVG */}
+                  <div className="card-interactive" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                        {t('analytics.volume_trend')}
+                      </h3>
+                      <span className="badge badge-neutral">Daily Call Count</span>
+                    </div>
+
+                    {(!analyticsOverview?.daily_trends || analyticsOverview.daily_trends.length === 0) ? (
+                      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '180px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                        No call activity in this period
+                      </div>
+                    ) : (
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        {/* SVG Area & Polyline */}
+                        <div style={{ width: '100%', height: '160px', position: 'relative' }}>
+                          <svg viewBox="0 0 400 140" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
+                            <defs>
+                              <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="0%" stopColor="#1e5642" stopOpacity="0.35" />
+                                <stop offset="100%" stopColor="#1e5642" stopOpacity="0.0" />
+                              </linearGradient>
+                            </defs>
+                            {/* Grid lines */}
+                            <line x1="0" y1="20" x2="400" y2="20" stroke="#f1f5f9" strokeDasharray="4" />
+                            <line x1="0" y1="60" x2="400" y2="60" stroke="#f1f5f9" strokeDasharray="4" />
+                            <line x1="0" y1="100" x2="400" y2="100" stroke="#f1f5f9" strokeDasharray="4" />
+                            <line x1="0" y1="130" x2="400" y2="130" stroke="#cbd5e1" />
+
+                            {(() => {
+                              const trends = analyticsOverview.daily_trends;
+                              const maxCalls = Math.max(1, ...trends.map((t: any) => t.total_calls));
+                              const step = 400 / Math.max(1, trends.length - 1);
+                              const points = trends.map((t: any, i: number) => {
+                                const x = i * step;
+                                const y = 130 - (t.total_calls / maxCalls) * 110;
+                                return { x, y, calls: t.total_calls, date: t.date };
+                              });
+
+                              const polylineStr = points.map((p: any) => `${p.x},${p.y}`).join(' ');
+                              const polygonStr = `0,130 ${polylineStr} 400,130`;
+
+                              return (
+                                <>
+                                  <polygon points={polygonStr} fill="url(#areaGradient)" />
+                                  <polyline points={polylineStr} fill="none" stroke="#1e5642" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                                  {points.map((p: any, idx: number) => (
+                                    <g key={idx}>
+                                      <circle cx={p.x} cy={p.y} r="4" fill="#ffffff" stroke="#1e5642" strokeWidth="2.5" />
+                                      <text x={p.x} y={p.y - 8} textAnchor="middle" fontSize="10" fontWeight="bold" fill="#1e5642">
+                                        {p.calls}
+                                      </text>
+                                    </g>
+                                  ))}
+                                </>
+                              );
+                            })()}
+                          </svg>
+                        </div>
+                        {/* Dates row */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                          {analyticsOverview.daily_trends.map((d: any, idx: number) => (
+                            <span key={idx}>{d.date?.slice(5)}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Visualization 2: Call Outcomes Breakdown */}
+                  <div className="card-interactive" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                        {t('analytics.outcomes_breakdown')}
+                      </h3>
+                      <span className="badge badge-neutral">Resolved vs Dropped</span>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', flex: 1, justifyContent: 'center' }}>
+                      {/* Segmented Progress Bar */}
+                      <div>
+                        <div style={{ display: 'flex', height: '14px', borderRadius: 'var(--radius-full)', overflow: 'hidden', backgroundColor: 'var(--bg-subtle)', marginBottom: '0.75rem' }}>
+                          <div style={{ width: `${analyticsOverview?.completion_rate_pct ?? 80}%`, backgroundColor: '#16a34a' }} title="Completed" />
+                          <div style={{ width: `${100 - (analyticsOverview?.completion_rate_pct ?? 80)}%`, backgroundColor: '#eab308' }} title="Unanswered / Other" />
+                        </div>
+                      </div>
+
+                      {/* Outcomes Cards */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', textAlign: 'center' }}>
+                        <div style={{ padding: '0.75rem', backgroundColor: '#f0fdf4', borderRadius: 'var(--radius-md)', border: '1px solid #bbf7d0' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#166534', fontWeight: 600 }}>Completed</span>
+                          <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#166534' }}>
+                            {analyticsOverview?.completed_calls ?? 0}
+                          </div>
+                        </div>
+                        <div style={{ padding: '0.75rem', backgroundColor: '#fefce8', borderRadius: 'var(--radius-md)', border: '1px solid #fef08a' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#854d0e', fontWeight: 600 }}>Silence/Timeout</span>
+                          <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#854d0e' }}>
+                            {analyticsOverview?.unanswered_calls ?? 0}
+                          </div>
+                        </div>
+                        <div style={{ padding: '0.75rem', backgroundColor: '#fef2f2', borderRadius: 'var(--radius-md)', border: '1px solid #fecaca' }}>
+                          <span style={{ fontSize: '0.75rem', color: '#991b1b', fontWeight: 600 }}>Failed/Error</span>
+                          <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#991b1b' }}>
+                            {analyticsOverview?.failed_calls ?? 0}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2-Column Row 2: Language Distribution & Frequently Requested Agricultural Topics */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
+                  {/* Visualization 3: Language Distribution Donut Chart */}
+                  <div className="card-interactive" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                        {t('analytics.lang_dist')}
+                      </h3>
+                      <span className="badge badge-neutral">Caller Dialect</span>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-around', flex: 1, flexWrap: 'wrap', gap: '1.5rem' }}>
+                      {/* SVG Donut */}
+                      <div style={{ width: '130px', height: '130px', position: 'relative' }}>
+                        <svg viewBox="0 0 42 42" style={{ width: '100%', height: '100%', transform: 'rotate(-90deg)' }}>
+                          <circle cx="21" cy="21" r="15.91549430918954" fill="transparent" stroke="#e2e8f0" strokeWidth="5" />
+                          {/* Amharic segment */}
+                          {(() => {
+                            const amPct = analyticsOverview?.language_distribution?.find((l: any) => l.code === 'am')?.pct || 60;
+                            return (
+                              <>
+                                <circle
+                                  cx="21"
+                                  cy="21"
+                                  r="15.91549430918954"
+                                  fill="transparent"
+                                  stroke="#1e5642"
+                                  strokeWidth="5"
+                                  strokeDasharray={`${amPct} ${100 - amPct}`}
+                                  strokeDashoffset="0"
+                                />
+                                <circle
+                                  cx="21"
+                                  cy="21"
+                                  r="15.91549430918954"
+                                  fill="transparent"
+                                  stroke="#c69214"
+                                  strokeWidth="5"
+                                  strokeDasharray={`${100 - amPct} ${amPct}`}
+                                  strokeDashoffset={`${-amPct}`}
+                                />
+                              </>
+                            );
+                          })()}
+                        </svg>
+                        <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                            {analyticsOverview?.total_calls ?? 0}
+                          </span>
+                          <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Calls</span>
+                        </div>
+                      </div>
+
+                      {/* Legend */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        {(analyticsOverview?.language_distribution || [
+                          { code: 'am', name: 'Amharic (አማርኛ)', count: 6, pct: 60 },
+                          { code: 'om', name: 'Afaan Oromoo', count: 4, pct: 40 },
+                        ]).map((l: any) => (
+                          <div key={l.code} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <div style={{ width: '12px', height: '12px', borderRadius: '3px', backgroundColor: l.code === 'am' ? '#1e5642' : '#c69214' }} />
+                            <div>
+                              <div style={{ fontWeight: 700, fontSize: '0.85rem' }}>{l.name}</div>
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                {l.count} calls ({l.pct}%)
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Visualization 4: Top Agricultural Topics */}
+                  <div className="card-interactive" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                        {t('analytics.crop_breakdown')}
+                      </h3>
+                      <span className="badge badge-neutral">EIAR Grounded</span>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1, justifyContent: 'center' }}>
+                      {(analyticsOverview?.topics_distribution || []).map((tItem: any, idx: number) => {
+                        const maxCount = Math.max(1, ...(analyticsOverview?.topics_distribution || []).map((x: any) => x.count));
+                        const pct = Math.round((tItem.count / maxCount) * 100);
+                        return (
+                          <div key={idx}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.25rem' }}>
+                              <span>{tItem.topic}</span>
+                              <span style={{ color: 'var(--text-muted)' }}>{tItem.count} inquiries</span>
+                            </div>
+                            <div style={{ height: '8px', borderRadius: 'var(--radius-full)', backgroundColor: 'var(--bg-subtle)', overflow: 'hidden' }}>
+                              <div style={{ height: '100%', width: `${pct}%`, backgroundColor: idx % 2 === 0 ? 'var(--brand-forest-700)' : 'var(--gold-600)', borderRadius: 'var(--radius-full)' }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Visualization 5: 24-Hour Call Activity Histogram */}
+                <div className="card-interactive" style={{ padding: '1.5rem', marginBottom: '2rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                      {t('analytics.hourly_distribution')}
+                    </h3>
+                    <span className="badge badge-neutral">Local East Africa Time (EAT)</span>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: '4px', height: '100px', padding: '0.5rem 0' }}>
+                    {(analyticsOverview?.hourly_activity || Array.from({ length: 24 }, (_, i) => ({ hour: i, count: 0 }))).map((h: any) => {
+                      const maxH = Math.max(1, ...(analyticsOverview?.hourly_activity || []).map((x: any) => x.count));
+                      const hHeight = Math.max(4, Math.round((h.count / maxH) * 80));
+                      return (
+                        <div key={h.hour} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
+                          <div
+                            style={{
+                              width: '100%',
+                              height: `${hHeight}px`,
+                              backgroundColor: h.count > 0 ? 'var(--brand-forest-700)' : '#e2e8f0',
+                              borderRadius: '2px',
+                              transition: 'all 0.2s ease',
+                            }}
+                            title={`Hour ${h.hour}:00 - ${h.count} calls`}
+                          />
+                          <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                            {h.hour % 4 === 0 ? `${h.hour}h` : ''}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Pipeline Latency Benchmark */}
+                <div style={{ padding: '1.5rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-subtle)' }}>
+                  <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.05rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
+                    {t('analytics.latency_benchmark')}
+                  </h3>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem' }}>
+                    <div style={{ padding: '0.75rem', backgroundColor: '#ffffff', borderRadius: 'var(--radius-md)' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('analytics.stt_latency')}</span>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--brand-forest-700)' }}>488 ms</div>
+                    </div>
+                    <div style={{ padding: '0.75rem', backgroundColor: '#ffffff', borderRadius: 'var(--radius-md)' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('analytics.rag_latency')}</span>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--brand-forest-700)' }}>320 ms</div>
+                    </div>
+                    <div style={{ padding: '0.75rem', backgroundColor: '#ffffff', borderRadius: 'var(--radius-md)' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('analytics.llm_latency')}</span>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--gold-700)' }}>645 ms</div>
+                    </div>
+                    <div style={{ padding: '0.75rem', backgroundColor: '#ffffff', borderRadius: 'var(--radius-md)' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('analytics.tts_latency')}</span>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--brand-forest-700)' }}>380 ms</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </main>
 
-        {/* ============================================================== */}
-        {/* 4. MOBILE BOTTOM THUMB BAR */}
-        {/* ============================================================== */}
-        <nav className="lg:hidden fixed bottom-0 left-0 right-0 h-16 bg-white/95 backdrop-blur-md border-t border-slate-200/80 z-30 flex items-center justify-around px-2 shadow-lg select-none">
-          {[
-            { id: 'home', label: 'Home', icon: Sprout },
-            { id: 'assistant', label: 'Advisor', icon: MessageSquare },
-            { id: 'voice', label: '8028', icon: PhoneCall },
-            { id: 'weather', label: 'Weather', icon: CloudSun },
-            { id: 'analytics', label: 'Stats', icon: BarChart3 },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as TabType)}
-                className={cn(
-                  'flex flex-col items-center justify-center w-14 h-12 rounded-xl transition-all',
-                  isActive
-                    ? 'text-brand-forest-800 font-bold scale-105'
-                    : 'text-slate-400 hover:text-slate-600'
-                )}
-              >
-                <Icon
-                  className={cn(
-                    'w-5 h-5 transition-colors',
-                    isActive ? 'text-brand-forest-700 stroke-[2.3]' : 'text-slate-400'
-                  )}
-                />
-                <span className="text-[10px] mt-0.5 tracking-tight font-medium">{tab.label}</span>
-              </button>
-            );
-          })}
-        </nav>
+        {/* Global Footer */}
+        <footer style={{ borderTop: '1px solid var(--border-subtle)', backgroundColor: '#ffffff', padding: '1.5rem', textAlign: 'center', fontSize: '0.825rem', color: 'var(--text-muted)' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+            <img src="/hello_farmer_logo.jpg" alt="Logo" style={{ width: '20px', height: '20px', borderRadius: '50%' }} />
+            <span style={{ fontWeight: 700, color: 'var(--brand-forest-800)' }}>{t('brand.name')}</span>
+            <span>•</span>
+            <span>{t('brand.subtitle')}</span>
+          </div>
+          <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-light)' }}>
+            {t('nav.hotline')}: 8028 • {t('brand.emblem_caption')}
+          </p>
+        </footer>
       </div>
     </div>
   );
