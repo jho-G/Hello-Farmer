@@ -14,23 +14,22 @@ except ImportError:
 
 
 def get_tts_provider(provider_type: str | None = None) -> BaseTTSProvider:
-    """Return configured TTS provider with automatic fallback (Gemini-first)."""
-    ptype = (provider_type or getattr(settings, "TTS_PROVIDER", "gemini")).lower()
+    """Return configured TTS provider with automatic fallback (Edge-TTS / Google TTS priority)."""
+    ptype = (provider_type or getattr(settings, "TTS_PROVIDER", "edge_tts")).lower()
     if ptype == "fallback":
         return FallbackSynthProvider()
+    elif ptype in ("edge_tts", "edge", "google"):
+        try:
+            return EdgeTTSProvider()
+        except Exception:
+            return FallbackSynthProvider()
     elif ptype == "gemini":
         try:
             return GeminiTTSProvider()
         except Exception:
             return EdgeTTSProvider()
-    elif ptype == "edge_tts":
-        try:
-            return EdgeTTSProvider()
-        except Exception:
-            return FallbackSynthProvider()
 
-    # Default to Gemini if configured, otherwise EdgeTTS
-    if getattr(settings, "GEMINI_API_KEY", None):
-        return GeminiTTSProvider()
+    # Default to Edge-TTS + Google TTS multi-tier provider
     return EdgeTTSProvider()
+
 

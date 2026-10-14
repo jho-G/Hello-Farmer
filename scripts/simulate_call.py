@@ -197,9 +197,9 @@ async def run_all_scenarios(host: str = "127.0.0.1", port: int = 9092):
     for name, func in scenarios:
         try:
             ok = await func(host, port)
-            print(f"  [✓ PASS] {name}")
+            print(f"  [PASS] {name}")
         except Exception as e:
-            print(f"  [✗ FAIL] {name}: {e}")
+            print(f"  [FAIL] {name}: {e}")
             all_passed = False
 
     print("\n" + "=" * 70)

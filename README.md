@@ -168,7 +168,7 @@ flowchart TD
 | **Speech-to-Text (STT)** | Google Gemini / Groq Whisper | Multimodal | High-accuracy Amharic and Afaan Oromo speech recognition. |
 | **Vector Database** | PostgreSQL + pgvector | 16 / 0.8.7 | Unified ACID storage for 768-dim embeddings, call records, and farmer profiles. |
 | **In-Memory Cache & Queue**| Redis | 7-Alpine | 60-minute weather cache TTL, rate limiting, and `arq` background queue. |
-| **LLM Reasoning** | Gemini 2.5 Flash / Groq Qwen | Production | Structured agricultural advice generation with strict JSON schema. |
+| **LLM Reasoning** | Groq Qwen (Primary Free) / Gemini Flash | Production | Structured agricultural advice generation with strict JSON schema. |
 | **Text-to-Speech (TTS)** | Edge-TTS + Google TTS | Multi-Tier | Neural speech synthesis with automatic resilient fallback. |
 | **Web Frontend** | Next.js (App Router) | 14.2 | Full-featured responsive React portal with localized interfaces. |
 | **Agro-Weather API** | Open-Meteo API | Free Tier | Real-time precipitation, temperature, humidity, and wind speed. |

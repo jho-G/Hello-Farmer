@@ -44,6 +44,8 @@ import {
   RotateCcw,
   Square,
   Upload,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { getTranslation, LANGUAGE_OPTIONS, SupportedLanguage } from './i18n/translations';
 import {
@@ -78,11 +80,10 @@ export default function HelloFarmerApp() {
   // Localization helper bound to reactive language state
   const t = (key: string) => getTranslation(key, language);
 
-  // Load language preference from localStorage
   useEffect(() => {
     try {
       const saved = localStorage.getItem('hello_farmer_lang') as SupportedLanguage;
-      if (saved && ['am', 'om', 'en', 'ti', 'so'].includes(saved)) {
+      if (saved && ['en', 'am', 'ti', 'so'].includes(saved)) {
         setLanguage(saved);
       }
     } catch {}
@@ -132,8 +133,21 @@ export default function HelloFarmerApp() {
   const [voiceAgentStatus, setVoiceAgentStatus] = useState<any>(null);
   const [callsList, setCallsList] = useState<any[]>([]);
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
+  const selectedCallIdRef = useRef<string | null>(null);
+  selectedCallIdRef.current = selectedCallId;
   const [selectedCallDetail, setSelectedCallDetail] = useState<any | null>(null);
   const [callDetailLoading, setCallDetailLoading] = useState<boolean>(false);
+
+  // Farmer Advisory Summaries & SMS Portal States
+  const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
+  const [historyLanguageFilter, setHistoryLanguageFilter] = useState<string>('all');
+  const [historySectionTab, setHistorySectionTab] = useState<'all' | 'calls' | 'sms'>('all');
+
+  // Live Phone Call Event Logs & Diagnostics Terminal
+  const [telephonyLogs, setTelephonyLogs] = useState<any[]>([]);
+  const [logFilter, setLogFilter] = useState<'ALL' | 'SPEECH' | 'AI' | 'AUDIO' | 'ERROR'>('ALL');
+  const [autoScrollLogs, setAutoScrollLogs] = useState<boolean>(true);
+  const logsTerminalRef = useRef<HTMLDivElement>(null);
 
   // Platform Analytics Overview States
   const [analyticsFilterDays, setAnalyticsFilterDays] = useState<number>(30);
@@ -173,9 +187,32 @@ export default function HelloFarmerApp() {
 
   // Fetch Calls List
   const fetchCallsList = () => {
-    fetch('/api/backend/calls?limit=25')
+    fetch('/api/backend/calls?limit=40')
       .then((res) => res.json())
-      .then((data) => setCallsList(data.calls || []))
+      .then((data) => {
+        const list = data.calls || [];
+        setCallsList(list);
+      })
+      .catch(() => {});
+  };
+
+  // Fetch SMS Logs
+  const fetchSmsList = () => {
+    fetch('/api/backend/developer/sms')
+      .then((res) => res.json())
+      .then((data) => setSmsList(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  };
+
+  // Fetch Live Telephony Event Logs
+  const fetchTelephonyLogs = () => {
+    fetch('/api/backend/telephony/logs?limit=150')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && Array.isArray(data.logs)) {
+          setTelephonyLogs(data.logs);
+        }
+      })
       .catch(() => {});
   };
 
@@ -189,7 +226,7 @@ export default function HelloFarmerApp() {
       .finally(() => setAnalyticsLoading(false));
   };
 
-  // Initial Data Fetch & Polling
+  // Initial Data Fetch & Real-time Auto-Update Polling
   useEffect(() => {
     // Fetch active warnings
     fetch('/api/backend/warnings/active')
@@ -219,28 +256,34 @@ export default function HelloFarmerApp() {
       .then((data) => setFarmerProfile(data))
       .catch(() => {});
 
-    // Fetch SMS logs
-    fetch('/api/backend/developer/sms')
-      .then((res) => res.json())
-      .then((data) => setSmsList(Array.isArray(data) ? data : []))
-      .catch(() => {});
-
     // Fetch admin analytics
     fetch('/api/backend/admin/analytics')
       .then((res) => res.json())
       .then((data) => setAnalytics(data))
       .catch(() => {});
 
-    // Voice status & call list
+    // Initial load for telephony, SMS, and live logs
     fetchVoiceAgentStatus();
     fetchCallsList();
+    fetchSmsList();
+    fetchTelephonyLogs();
 
-    // Polling voice agent status every 10s
+    // Auto-update full stack telephony, calls list, SMS, and live logs every 1.5 seconds
     const timer = setInterval(() => {
       fetchVoiceAgentStatus();
-    }, 10000);
+      fetchCallsList();
+      fetchSmsList();
+      fetchTelephonyLogs();
+    }, 1500);
     return () => clearInterval(timer);
   }, []);
+
+  // Auto-scroll terminal to latest log when new event arrives
+  useEffect(() => {
+    if (autoScrollLogs && logsTerminalRef.current) {
+      logsTerminalRef.current.scrollTop = logsTerminalRef.current.scrollHeight;
+    }
+  }, [telephonyLogs, autoScrollLogs]);
 
   // Re-fetch analytics when date filter changes
   useEffect(() => {
@@ -270,6 +313,30 @@ export default function HelloFarmerApp() {
       .catch(() => {})
       .finally(() => setCallDetailLoading(false));
   };
+
+  // Toggle open / close for transcripts
+  const toggleCallTranscript = (callId: string) => {
+    if (selectedCallId === callId) {
+      setSelectedCallId(null);
+      setSelectedCallDetail(null);
+    } else {
+      handleViewCallDetail(callId);
+    }
+  };
+
+  // Keep open call detail dialog updated live
+  useEffect(() => {
+    if (!selectedCallId) return;
+    const detailTimer = setInterval(() => {
+      fetch(`/api/backend/calls/${selectedCallId}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data && !data.error) setSelectedCallDetail(data);
+        })
+        .catch(() => {});
+    }, 3000);
+    return () => clearInterval(detailTimer);
+  }, [selectedCallId]);
 
   // Audio playback stop utility
   const stopCurrentAudio = () => {
@@ -422,6 +489,9 @@ export default function HelloFarmerApp() {
           if (data.transcript && data.transcript.trim()) {
             setPendingTranscript(data.transcript.trim());
             setQuery(data.transcript.trim());
+            if (data.language && ['en', 'am', 'ti', 'so'].includes(data.language)) {
+              handleLanguageChange(data.language as SupportedLanguage);
+            }
             setRecordingState('idle');
           } else {
             setMicErrorMessage(t('advisor.voice_no_speech'));
@@ -481,6 +551,9 @@ export default function HelloFarmerApp() {
         if (data.transcript && data.transcript.trim()) {
           setPendingTranscript(data.transcript.trim());
           setQuery(data.transcript.trim());
+          if (data.language && ['en', 'am', 'ti', 'so'].includes(data.language)) {
+            handleLanguageChange(data.language as SupportedLanguage);
+          }
           setRecordingState('idle');
         } else {
           setMicErrorMessage(t('advisor.voice_no_speech'));
@@ -552,10 +625,12 @@ export default function HelloFarmerApp() {
       const data = await res.json();
 
       const defaultFallback =
-        language === 'om'
-          ? "Odeeffannoon hin argamne. Maaloo gaaffii keessan irra deebi'aa yaalaa."
-          : language === 'am'
+        language === 'am'
           ? 'መረጃ አልተገኘም። እባክዎ ጥያቄዎን በድጋሚ ያቅርቡ።'
+          : language === 'ti'
+          ? 'ሓበሬታ ኣይተረኽበን። በጃኹም ሕቶኹም ደጊምኩም ሕተቱ።'
+          : language === 'so'
+          ? 'Xog lagama helin. Fadlan mar kale isku day.'
           : 'Information could not be retrieved. Please try asking again.';
 
       const assistantMsg: ChatMessage = {
@@ -643,14 +718,14 @@ export default function HelloFarmerApp() {
   };
 
   // Nav Items definition localized with i18n keys
-  const navItems: { id: TabType; key: string; icon: any }[] = [
+  const navItems: { id: TabType; key: string; icon: any; isComingSoon?: boolean }[] = [
     { id: 'home', key: 'nav.dashboard', icon: Sprout },
     { id: 'assistant', key: 'nav.advisor', icon: MessageSquare },
     { id: 'voice', key: 'nav.voice', icon: PhoneCall },
-    { id: 'weather', key: 'nav.weather', icon: CloudSun },
-    { id: 'yield', key: 'nav.yield', icon: TrendingUp },
     { id: 'history', key: 'nav.history', icon: History },
     { id: 'analytics', key: 'nav.analytics', icon: BarChart3 },
+    { id: 'weather', key: 'nav.weather', icon: CloudSun, isComingSoon: true },
+    { id: 'yield', key: 'nav.yield', icon: TrendingUp, isComingSoon: true },
   ];
 
   return (
@@ -771,35 +846,81 @@ export default function HelloFarmerApp() {
           >
             {t('nav.menu_title')}
           </div>
-          {navItems.map((item) => {
+          {navItems.map((item, idx) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
+            const isFirstComingSoon = item.isComingSoon && !navItems[idx - 1]?.isComingSoon;
             return (
-              <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.75rem',
-                  padding: '0.625rem 0.875rem',
-                  borderRadius: 'var(--radius-md)',
-                  border: 'none',
-                  backgroundColor: isActive ? 'var(--brand-forest-50)' : 'transparent',
-                  color: isActive ? 'var(--brand-forest-700)' : 'var(--text-body)',
-                  fontWeight: isActive ? 700 : 500,
-                  fontSize: '0.9rem',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  width: '100%',
-                  transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
-                  borderLeft: isActive ? '3px solid var(--brand-forest-700)' : '3px solid transparent',
-                }}
-              >
-                <Icon size={18} color={isActive ? 'var(--brand-forest-700)' : '#69786f'} />
-                <span style={{ flex: 1 }}>{t(item.key)}</span>
-                {isActive && <ChevronRight size={14} color="var(--brand-forest-700)" />}
-              </button>
+              <React.Fragment key={item.id}>
+                {isFirstComingSoon && (
+                  <div
+                    style={{
+                      margin: '0.85rem 0.5rem 0.35rem',
+                      paddingTop: '0.65rem',
+                      borderTop: '1px solid var(--border-subtle)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: '0.68rem',
+                        fontWeight: 700,
+                        color: 'var(--text-muted)',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                      }}
+                    >
+                      {t('nav.phase2') || 'Phase 2 (Roadmap)'}
+                    </span>
+                  </div>
+                )}
+                <button
+                  onClick={() => setActiveTab(item.id)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.75rem',
+                    padding: '0.625rem 0.875rem',
+                    borderRadius: 'var(--radius-md)',
+                    border: 'none',
+                    backgroundColor: isActive ? 'var(--brand-forest-50)' : 'transparent',
+                    color: isActive ? 'var(--brand-forest-700)' : item.isComingSoon ? 'var(--text-muted)' : 'var(--text-body)',
+                    fontWeight: isActive ? 700 : 500,
+                    fontSize: '0.9rem',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    width: '100%',
+                    transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
+                    borderLeft: isActive ? '3px solid var(--brand-forest-700)' : '3px solid transparent',
+                    opacity: item.isComingSoon && !isActive ? 0.85 : 1,
+                  }}
+                >
+                  <Icon size={18} color={isActive ? 'var(--brand-forest-700)' : item.isComingSoon ? '#94a3b8' : '#69786f'} />
+                  <span style={{ flex: 1 }}>{t(item.key)}</span>
+                  {item.isComingSoon ? (
+                    <span
+                      style={{
+                        fontSize: '0.62rem',
+                        fontWeight: 700,
+                        padding: '0.15rem 0.45rem',
+                        borderRadius: '9999px',
+                        backgroundColor: isActive ? 'var(--brand-forest-100)' : '#f1f5f9',
+                        color: isActive ? 'var(--brand-forest-800)' : '#64748b',
+                        border: '1px solid',
+                        borderColor: isActive ? 'var(--brand-forest-200)' : '#e2e8f0',
+                        letterSpacing: '0.02em',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {t('nav.coming_soon') || 'Coming Soon'}
+                    </span>
+                  ) : (
+                    isActive && <ChevronRight size={14} color="var(--brand-forest-700)" />
+                  )}
+                </button>
+              </React.Fragment>
             );
           })}
         </nav>
@@ -982,31 +1103,68 @@ export default function HelloFarmerApp() {
               gap: '0.5rem',
             }}
           >
-            {navItems.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => {
-                  setActiveTab(item.id);
-                  setMobileMenuOpen(false);
-                }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.75rem',
-                  padding: '0.75rem',
-                  borderRadius: 'var(--radius-md)',
-                  border: 'none',
-                  backgroundColor: activeTab === item.id ? 'var(--brand-forest-50)' : 'transparent',
-                  color: activeTab === item.id ? 'var(--brand-forest-700)' : 'var(--text-body)',
-                  fontWeight: activeTab === item.id ? 700 : 500,
-                  fontSize: '0.95rem',
-                  textAlign: 'left',
-                }}
-              >
-                <item.icon size={18} />
-                <span>{t(item.key)}</span>
-              </button>
-            ))}
+            {navItems.map((item, idx) => {
+              const isFirstComingSoon = item.isComingSoon && !navItems[idx - 1]?.isComingSoon;
+              return (
+                <React.Fragment key={item.id}>
+                  {isFirstComingSoon && (
+                    <div
+                      style={{
+                        margin: '0.5rem 0.25rem 0.25rem',
+                        paddingTop: '0.5rem',
+                        borderTop: '1px solid var(--border-subtle)',
+                        fontSize: '0.68rem',
+                        fontWeight: 700,
+                        color: 'var(--text-muted)',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                      }}
+                    >
+                      {t('nav.phase2') || 'Phase 2 (Roadmap)'}
+                    </div>
+                  )}
+                  <button
+                    onClick={() => {
+                      setActiveTab(item.id);
+                      setMobileMenuOpen(false);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.75rem',
+                      padding: '0.75rem',
+                      borderRadius: 'var(--radius-md)',
+                      border: 'none',
+                      backgroundColor: activeTab === item.id ? 'var(--brand-forest-50)' : 'transparent',
+                      color: activeTab === item.id ? 'var(--brand-forest-700)' : item.isComingSoon ? 'var(--text-muted)' : 'var(--text-body)',
+                      fontWeight: activeTab === item.id ? 700 : 500,
+                      fontSize: '0.95rem',
+                      textAlign: 'left',
+                      width: '100%',
+                    }}
+                  >
+                    <item.icon size={18} color={activeTab === item.id ? 'var(--brand-forest-700)' : item.isComingSoon ? '#94a3b8' : '#69786f'} />
+                    <span style={{ flex: 1 }}>{t(item.key)}</span>
+                    {item.isComingSoon && (
+                      <span
+                        style={{
+                          fontSize: '0.62rem',
+                          fontWeight: 700,
+                          padding: '0.15rem 0.45rem',
+                          borderRadius: '9999px',
+                          backgroundColor: activeTab === item.id ? 'var(--brand-forest-100)' : '#f1f5f9',
+                          color: activeTab === item.id ? 'var(--brand-forest-800)' : '#64748b',
+                          border: '1px solid',
+                          borderColor: activeTab === item.id ? 'var(--brand-forest-200)' : '#e2e8f0',
+                        }}
+                      >
+                        {t('nav.coming_soon') || 'Coming Soon'}
+                      </span>
+                    )}
+                  </button>
+                </React.Fragment>
+              );
+            })}
           </div>
         )}
 
@@ -1252,10 +1410,25 @@ export default function HelloFarmerApp() {
                 <div
                   className="card-interactive animate-entrance stagger-4"
                   onClick={() => setActiveTab('weather')}
-                  style={{ padding: '1.5rem', cursor: 'pointer', display: 'flex', flexDirection: 'column' }}
+                  style={{ padding: '1.5rem', cursor: 'pointer', display: 'flex', flexDirection: 'column', position: 'relative' }}
                 >
-                  <div style={{ width: '42px', height: '42px', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--brand-forest-50)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem' }}>
-                    <CloudSun size={22} color="var(--brand-forest-700)" />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <div style={{ width: '42px', height: '42px', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--brand-forest-50)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <CloudSun size={22} color="var(--brand-forest-700)" />
+                    </div>
+                    <span
+                      style={{
+                        fontSize: '0.65rem',
+                        fontWeight: 700,
+                        padding: '0.2rem 0.55rem',
+                        borderRadius: '9999px',
+                        backgroundColor: '#f1f5f9',
+                        color: '#64748b',
+                        border: '1px solid #e2e8f0',
+                      }}
+                    >
+                      {t('nav.coming_soon') || 'Coming Soon'}
+                    </span>
                   </div>
                   <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.1rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
                     {t('feature.weather_title')}
@@ -1271,10 +1444,25 @@ export default function HelloFarmerApp() {
                 <div
                   className="card-interactive animate-entrance stagger-5"
                   onClick={() => setActiveTab('yield')}
-                  style={{ padding: '1.5rem', cursor: 'pointer', display: 'flex', flexDirection: 'column' }}
+                  style={{ padding: '1.5rem', cursor: 'pointer', display: 'flex', flexDirection: 'column', position: 'relative' }}
                 >
-                  <div style={{ width: '42px', height: '42px', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--gold-50)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem' }}>
-                    <TrendingUp size={22} color="var(--gold-700)" />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <div style={{ width: '42px', height: '42px', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--gold-50)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <TrendingUp size={22} color="var(--gold-700)" />
+                    </div>
+                    <span
+                      style={{
+                        fontSize: '0.65rem',
+                        fontWeight: 700,
+                        padding: '0.2rem 0.55rem',
+                        borderRadius: '9999px',
+                        backgroundColor: '#f1f5f9',
+                        color: '#64748b',
+                        border: '1px solid #e2e8f0',
+                      }}
+                    >
+                      {t('nav.coming_soon') || 'Coming Soon'}
+                    </span>
                   </div>
                   <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.1rem', fontWeight: 700, color: 'var(--brand-forest-800)' }}>
                     {t('feature.yield_title')}
@@ -2258,7 +2446,7 @@ export default function HelloFarmerApp() {
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <span style={{ fontWeight: 700, fontSize: '0.85rem' }}>{c.started_at}</span>
                             <span className="badge badge-neutral" style={{ fontSize: '0.7rem' }}>
-                              {c.language === 'om' ? 'Afaan Oromoo' : 'አማርኛ'}
+                              {LANGUAGE_OPTIONS.find((l) => l.code === (c.language || 'am'))?.nativeName || c.language?.toUpperCase()}
                             </span>
                             <span className={`badge ${c.end_reason === 'completed' ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '0.7rem' }}>
                               {c.end_reason === 'completed' ? 'Completed' : c.end_reason}
@@ -2434,6 +2622,49 @@ export default function HelloFarmerApp() {
           {/* ======================================================== */}
           {activeTab === 'weather' && (
             <div className="animate-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+              {/* Phase 2 Coming Soon Notice Banner */}
+              <div
+                style={{
+                  padding: '1rem 1.25rem',
+                  backgroundColor: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: 'var(--radius-lg)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '1rem',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem' }}>
+                    🛰️
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: '0.9rem', color: '#1e293b' }}>
+                      Phase 2 Roadmap Feature • Out of MVP Scope
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: '#64748b' }}>
+                      Automated weather radar, satellite indices, and IoT soil telemetry will launch in Phase 2. Interactive preview is active below.
+                    </div>
+                  </div>
+                </div>
+                <span
+                  style={{
+                    fontSize: '0.7rem',
+                    fontWeight: 800,
+                    padding: '0.25rem 0.65rem',
+                    borderRadius: '9999px',
+                    backgroundColor: '#fef3c7',
+                    color: '#92400e',
+                    border: '1px solid #fde68a',
+                    letterSpacing: '0.04em',
+                  }}
+                >
+                  {t('nav.coming_soon') || 'COMING SOON'}
+                </span>
+              </div>
+
               {/* Weather Banner */}
               <div className="card-interactive" style={{ padding: '2rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
@@ -2576,6 +2807,49 @@ export default function HelloFarmerApp() {
           {/* ======================================================== */}
           {activeTab === 'yield' && (
             <div className="animate-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+              {/* Phase 2 Coming Soon Notice Banner */}
+              <div
+                style={{
+                  padding: '1rem 1.25rem',
+                  backgroundColor: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: 'var(--radius-lg)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '1rem',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem' }}>
+                    📈
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: '0.9rem', color: '#1e293b' }}>
+                      Phase 2 Roadmap Feature • Out of MVP Scope
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: '#64748b' }}>
+                      Deep agronomic machine learning, regional fertilizer optimization, and satellite NDVI calibration are scheduled for Phase 2.
+                    </div>
+                  </div>
+                </div>
+                <span
+                  style={{
+                    fontSize: '0.7rem',
+                    fontWeight: 800,
+                    padding: '0.25rem 0.65rem',
+                    borderRadius: '9999px',
+                    backgroundColor: '#fef3c7',
+                    color: '#92400e',
+                    border: '1px solid #fde68a',
+                    letterSpacing: '0.04em',
+                  }}
+                >
+                  {t('nav.coming_soon') || 'COMING SOON'}
+                </span>
+              </div>
+
               <div className="card-interactive" style={{ padding: '2rem' }}>
                 <div style={{ marginBottom: '1.5rem' }}>
                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--brand-forest-700)', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.25rem' }}>
@@ -2736,258 +3010,673 @@ export default function HelloFarmerApp() {
           {/* ======================================================== */}
           {activeTab === 'history' && (
             <div className="animate-entrance" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-              {/* Farmer Profile Card */}
-              <div className="card-interactive" style={{ padding: '1.75rem' }}>
-                <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
-                  {t('history.farmer_profile_title')}
-                </h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-                  <div style={{ padding: '0.875rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('history.caller_id')}</span>
-                    <div style={{ fontWeight: 700, fontSize: '0.9rem', fontFamily: 'monospace' }}>
-                      {farmerProfile?.phone_hash || '03e80af0...8275'}
+              {/* 1. Header & Executive Summary KPI Strip */}
+              <div
+                className="card-interactive"
+                style={{
+                  padding: '2rem',
+                  background: 'linear-gradient(135deg, rgba(30, 86, 66, 0.05) 0%, rgba(217, 163, 62, 0.06) 100%), #ffffff',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1.25rem', marginBottom: '1.5rem' }}>
+                  <div>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', backgroundColor: 'var(--brand-forest-50)', color: 'var(--brand-forest-800)', padding: '0.3rem 0.85rem', borderRadius: '9999px', fontSize: '0.8rem', fontWeight: 700, marginBottom: '0.65rem', border: '1px solid var(--brand-forest-200)' }}>
+                      <FileText size={15} color="var(--brand-forest-700)" />
+                      <span>National Extension Intelligence & Outbound SMS Portal</span>
                     </div>
+                    <h2 style={{ margin: 0, fontSize: '1.85rem', fontWeight: 800, color: 'var(--brand-forest-900)' }}>
+                      Farmer Summaries & SMS Portal
+                    </h2>
+                    <p style={{ margin: '0.4rem 0 0 0', color: 'var(--text-muted)', fontSize: '0.925rem', maxWidth: '720px', lineHeight: 1.5 }}>
+                      Comprehensive administrative registry of verified 8028 voice consultations, farmer identities, localized zonal addresses, advisory summaries, and Ethio Telecom GSM SMS dispatches.
+                    </p>
                   </div>
-                  <div style={{ padding: '0.875rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('yield.woreda_label')} & {t('yield.region_label')}</span>
-                    <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>
-                      {farmerProfile?.woreda || 'Adama'} Woreda, {farmerProfile?.region || 'Oromia'}
-                    </div>
+
+                  {/* Actions & Live Status */}
+                  <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => {
+                        fetchCallsList();
+                        fetchSmsList();
+                      }}
+                      className="btn-secondary"
+                      style={{ padding: '0.5rem 0.95rem', fontSize: '0.825rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}
+                    >
+                      <RefreshCw size={14} />
+                      <span>{t('weather.refresh')}</span>
+                    </button>
+                    <span className="badge badge-success" style={{ padding: '0.5rem 0.85rem', fontSize: '0.78rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <Radio size={13} className="animate-pulse" />
+                      <span>GSM SMS Dispatch: ACTIVE</span>
+                    </span>
                   </div>
-                  <div style={{ padding: '0.875rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Preferred Language</span>
-                    <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>
-                      {LANGUAGE_OPTIONS.find((l) => l.code === (farmerProfile?.language || language))?.nativeName}
+                </div>
+
+                {/* 4 Real-World Administrative Stat Highlights */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
+                  <div style={{ padding: '1.15rem 1.25rem', backgroundColor: '#ffffff', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-sm)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600 }}>Total Farmer Inquiries</span>
+                      <PhoneIncoming size={16} color="var(--brand-forest-700)" />
                     </div>
+                    <div style={{ fontSize: '1.85rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                      {callsList.length}
+                    </div>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Recorded on 8028 Hotline</span>
                   </div>
-                  <div style={{ padding: '0.875rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>SMS Notification Status</span>
-                    <div style={{ fontWeight: 700, fontSize: '0.9rem', color: farmerProfile?.opted_in !== false ? 'var(--success)' : 'var(--danger)' }}>
-                      {farmerProfile?.opted_in !== false ? t('history.opted_in') : t('history.opted_out')}
+
+                  <div style={{ padding: '1.15rem 1.25rem', backgroundColor: '#ffffff', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-sm)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600 }}>Grounded Summaries Delivered</span>
+                      <CheckCircle2 size={16} color="var(--success)" />
                     </div>
+                    <div style={{ fontSize: '1.85rem', fontWeight: 800, color: 'var(--success)' }}>
+                      {callsList.filter((c: any) => c.reached_answer).length}
+                    </div>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      {callsList.length ? `${Math.round((callsList.filter((c: any) => c.reached_answer).length / callsList.length) * 100)}% verified resolution rate` : '100% verified'}
+                    </span>
+                  </div>
+
+                  <div style={{ padding: '1.15rem 1.25rem', backgroundColor: '#ffffff', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-sm)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600 }}>Outbound SMS Messages</span>
+                      <Send size={16} color="var(--gold-700)" />
+                    </div>
+                    <div style={{ fontSize: '1.85rem', fontWeight: 800, color: 'var(--gold-800)' }}>
+                      {smsList.length}
+                    </div>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Delivered via Ethio Telecom GSM</span>
+                  </div>
+
+                  <div style={{ padding: '1.15rem 1.25rem', backgroundColor: '#ffffff', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-subtle)', boxShadow: 'var(--shadow-sm)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600 }}>Geographic Reach</span>
+                      <MapPin size={16} color="#0284c7" />
+                    </div>
+                    <div style={{ fontSize: '1.85rem', fontWeight: 800, color: '#0284c7' }}>
+                      Multi-Regional
+                    </div>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Oromia, Amhara, Sidama, Tigray</span>
                   </div>
                 </div>
               </div>
 
-              {/* Selected Call Transcript Viewer Modal / Drawer */}
-              {selectedCallId && (
-                <div className="card-interactive" style={{ padding: '1.75rem', border: '2px solid var(--brand-forest-700)', backgroundColor: '#ffffff' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.75rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                      <PhoneCall size={20} color="var(--brand-forest-700)" />
-                      <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
-                        {t('history.dialogue_turns')}
-                      </h3>
-                      <span className="badge badge-success">
-                        {selectedCallDetail?.language === 'om' ? 'Afaan Oromoo' : 'አማርኛ'}
-                      </span>
-                    </div>
+              {/* 2. Unified Search & Administrative Filter Bar */}
+              <div
+                className="card-interactive"
+                style={{
+                  padding: '1.25rem 1.5rem',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '1rem',
+                }}
+              >
+                {/* Search Field */}
+                <div style={{ position: 'relative', flex: '1 1 320px', maxWidth: '520px' }}>
+                  <Search size={18} color="var(--text-muted)" style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)' }} />
+                  <input
+                    type="text"
+                    placeholder="Search by Farmer ID, Phone, Woreda, Region, or crop inquiry..."
+                    value={historySearchQuery}
+                    onChange={(e) => setHistorySearchQuery(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '0.65rem 0.85rem 0.65rem 2.5rem',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--border-subtle)',
+                      fontSize: '0.85rem',
+                      fontFamily: 'inherit',
+                      backgroundColor: '#ffffff',
+                    }}
+                  />
+                  {historySearchQuery && (
                     <button
-                      onClick={() => {
-                        setSelectedCallId(null);
-                        setSelectedCallDetail(null);
-                      }}
-                      className="btn-secondary"
-                      style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                      onClick={() => setHistorySearchQuery('')}
+                      style={{ position: 'absolute', right: '0.75rem', top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--text-muted)' }}
                     >
-                      <X size={16} />
-                      <span>{t('common.close')}</span>
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+
+                {/* Tab Pill Switches & Language Filter */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', backgroundColor: 'var(--bg-subtle)', padding: '0.25rem', borderRadius: 'var(--radius-md)' }}>
+                    <button
+                      onClick={() => setHistorySectionTab('all')}
+                      style={{
+                        padding: '0.4rem 0.85rem',
+                        borderRadius: 'var(--radius-sm)',
+                        border: 'none',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        backgroundColor: historySectionTab === 'all' ? 'var(--brand-forest-700)' : 'transparent',
+                        color: historySectionTab === 'all' ? '#ffffff' : 'var(--text-body)',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      All Records ({callsList.length + smsList.length})
+                    </button>
+                    <button
+                      onClick={() => setHistorySectionTab('calls')}
+                      style={{
+                        padding: '0.4rem 0.85rem',
+                        borderRadius: 'var(--radius-sm)',
+                        border: 'none',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        backgroundColor: historySectionTab === 'calls' ? 'var(--brand-forest-700)' : 'transparent',
+                        color: historySectionTab === 'calls' ? '#ffffff' : 'var(--text-body)',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      Calls & Summaries ({callsList.length})
+                    </button>
+                    <button
+                      onClick={() => setHistorySectionTab('sms')}
+                      style={{
+                        padding: '0.4rem 0.85rem',
+                        borderRadius: 'var(--radius-sm)',
+                        border: 'none',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        backgroundColor: historySectionTab === 'sms' ? 'var(--brand-forest-700)' : 'transparent',
+                        color: historySectionTab === 'sms' ? '#ffffff' : 'var(--text-body)',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      SMS Dispatches ({smsList.length})
                     </button>
                   </div>
 
-                  {callDetailLoading ? (
-                    <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>{t('common.loading')}</p>
-                  ) : selectedCallDetail ? (
-                    <div>
-                      {/* Call metadata header */}
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.75rem', marginBottom: '1.25rem', padding: '0.75rem 1rem', backgroundColor: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', fontSize: '0.8rem' }}>
-                        <div>
-                          <span style={{ color: 'var(--text-muted)' }}>Started:</span>
-                          <div style={{ fontWeight: 700 }}>{selectedCallDetail.started_at || 'N/A'}</div>
-                        </div>
-                        <div>
-                          <span style={{ color: 'var(--text-muted)' }}>Duration:</span>
-                          <div style={{ fontWeight: 700 }}>{selectedCallDetail.duration_seconds} seconds</div>
-                        </div>
-                        <div>
-                          <span style={{ color: 'var(--text-muted)' }}>Outcome:</span>
-                          <div style={{ fontWeight: 700, color: selectedCallDetail.end_reason === 'completed' ? 'var(--success)' : 'var(--warning)' }}>
-                            {selectedCallDetail.end_reason}
-                          </div>
-                        </div>
-                        <div>
-                          <span style={{ color: 'var(--text-muted)' }}>Caller Hash:</span>
-                          <div style={{ fontWeight: 700, fontFamily: 'monospace' }}>{selectedCallDetail.caller_hash}</div>
-                        </div>
-                      </div>
+                  <select
+                    value={historyLanguageFilter}
+                    onChange={(e) => setHistoryLanguageFilter(e.target.value)}
+                    style={{
+                      padding: '0.45rem 0.75rem',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--border-subtle)',
+                      fontSize: '0.8rem',
+                      backgroundColor: '#ffffff',
+                      color: 'var(--text-main)',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <option value="all">All Languages</option>
+                    <option value="am">Amharic (አማርኛ)</option>
+                    <option value="om">Afaan Oromoo</option>
+                    <option value="en">English</option>
+                  </select>
+                </div>
+              </div>
 
-                      {/* Conversation Turns List */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
-                        {(selectedCallDetail.messages || []).map((msg: any, idx: number) => {
-                          const isCaller = msg.speaker === 'caller';
-                          return (
-                            <div
-                              key={msg.id || idx}
-                              style={{
-                                display: 'flex',
-                                flexDirection: 'column',
-                                alignItems: isCaller ? 'flex-end' : 'flex-start',
-                              }}
-                            >
-                              <div
-                                style={{
-                                  maxWidth: '75%',
-                                  padding: '0.875rem 1.15rem',
-                                  borderRadius: isCaller ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
-                                  backgroundColor: isCaller ? 'var(--brand-forest-700)' : 'var(--bg-subtle)',
-                                  color: isCaller ? '#ffffff' : 'var(--text-main)',
-                                  boxShadow: 'var(--shadow-sm)',
-                                  fontSize: '0.925rem',
-                                  lineHeight: 1.5,
-                                }}
-                              >
-                                <div style={{ fontSize: '0.7rem', fontWeight: 700, marginBottom: '0.25rem', opacity: 0.8 }}>
-                                  {isCaller ? '👨‍🌾 Farmer (Caller)' : '🤖 Hello Farmer AI (8028 Assistant)'}
-                                </div>
-                                <div>{msg.text}</div>
+              {/* 3. Farmer Calls, Addresses & Collapsible Transcription Drawer Section */}
+              {historySectionTab !== 'sms' && (
+                <div className="card-interactive" style={{ padding: '1.75rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <PhoneIncoming size={20} color="var(--brand-forest-700)" />
+                      <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 800, color: 'var(--brand-forest-900)' }}>
+                        Farmer Advisory Call Records & Detailed Transcripts
+                      </h3>
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      Showing {callsList.filter((c: any) => {
+                        const matchesLang = historyLanguageFilter === 'all' || (c.language || 'am') === historyLanguageFilter;
+                        const q = historySearchQuery.toLowerCase();
+                        const matchesQuery =
+                          !q ||
+                          (c.farmer_id || '').toLowerCase().includes(q) ||
+                          (c.phone_display || '').toLowerCase().includes(q) ||
+                          (c.farmer_address || '').toLowerCase().includes(q) ||
+                          (c.woreda || '').toLowerCase().includes(q) ||
+                          (c.first_question || '').toLowerCase().includes(q) ||
+                          (c.summary || '').toLowerCase().includes(q);
+                        return matchesLang && matchesQuery;
+                      }).length} of {callsList.length} total calls
+                    </div>
+                  </div>
+
+                  {/* Call Rows List */}
+                  {callsList
+                    .filter((c: any) => {
+                      const matchesLang = historyLanguageFilter === 'all' || (c.language || 'am') === historyLanguageFilter;
+                      const q = historySearchQuery.toLowerCase();
+                      const matchesQuery =
+                        !q ||
+                        (c.farmer_id || '').toLowerCase().includes(q) ||
+                        (c.phone_display || '').toLowerCase().includes(q) ||
+                        (c.farmer_address || '').toLowerCase().includes(q) ||
+                        (c.woreda || '').toLowerCase().includes(q) ||
+                        (c.first_question || '').toLowerCase().includes(q) ||
+                        (c.summary || '').toLowerCase().includes(q);
+                      return matchesLang && matchesQuery;
+                    })
+                    .map((c: any) => {
+                      const isExpanded = selectedCallId === c.id;
+                      return (
+                        <div
+                          key={c.id}
+                          style={{
+                            marginBottom: '1rem',
+                            borderRadius: 'var(--radius-lg)',
+                            border: isExpanded ? '2px solid var(--brand-forest-600)' : '1px solid var(--border-subtle)',
+                            backgroundColor: isExpanded ? '#ffffff' : '#ffffff',
+                            boxShadow: isExpanded ? '0 10px 25px -5px rgba(30, 86, 66, 0.12)' : 'var(--shadow-sm)',
+                            transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+                            overflow: 'hidden',
+                          }}
+                        >
+                          {/* Row Header Bar */}
+                          <div
+                            style={{
+                              padding: '1.15rem 1.25rem',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              flexWrap: 'wrap',
+                              gap: '1rem',
+                              backgroundColor: isExpanded ? 'rgba(30, 86, 66, 0.03)' : 'transparent',
+                              cursor: 'pointer',
+                            }}
+                            onClick={() => toggleCallTranscript(c.id)}
+                          >
+                            {/* Left: Farmer Identity & Address */}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', minWidth: '220px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                                <span
+                                  className="badge"
+                                  style={{
+                                    backgroundColor: 'var(--brand-forest-50)',
+                                    color: 'var(--brand-forest-800)',
+                                    border: '1px solid var(--brand-forest-200)',
+                                    fontWeight: 800,
+                                    fontSize: '0.78rem',
+                                  }}
+                                >
+                                  🧑‍🌾 {c.farmer_id || 'ETH-FARM-8028'}
+                                </span>
+                                <span style={{ fontFamily: 'monospace', fontSize: '0.85rem', color: '#334155', fontWeight: 700 }}>
+                                  {c.phone_display || c.caller_hash}
+                                </span>
+                                <span className="badge badge-neutral" style={{ fontSize: '0.7rem' }}>
+                                  {LANGUAGE_OPTIONS.find((l) => l.code === (c.language || 'am'))?.nativeName || c.language?.toUpperCase()}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem', color: 'var(--brand-forest-700)', fontWeight: 600 }}>
+                                <MapPin size={13} color="var(--brand-forest-700)" />
+                                <span>{c.farmer_address || `${c.woreda || 'Adama'}, ${c.region || 'Oromia'}`}</span>
                               </div>
                             </div>
-                          );
-                        })}
-                      </div>
+
+                            {/* Center: Question & Advisory Summary Snippet */}
+                            <div style={{ flex: '1 1 280px', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                              <div style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--brand-forest-900)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '420px' }}>
+                                {c.first_question ? `“${c.first_question}”` : 'Voice Inquiry • 8028 Session'}
+                              </div>
+                              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '450px' }}>
+                                <strong style={{ color: 'var(--brand-forest-700)' }}>Advisory:</strong> {c.summary || c.last_answer || 'Guidance provided on 8028 hotline.'}
+                              </div>
+                            </div>
+
+                            {/* Right: Metadata & Open/Close Toggle Button */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                              <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.2rem' }}>
+                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{c.started_at}</span>
+                                <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748b' }}>{c.duration_seconds}s</span>
+                                  <span className={`badge ${c.end_reason === 'completed' ? 'badge-success' : 'badge-warning'}`} style={{ fontSize: '0.68rem', fontWeight: 700 }}>
+                                    {c.end_reason === 'completed' ? 'COMPLETED' : c.end_reason?.toUpperCase()}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Toggle Button */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleCallTranscript(c.id);
+                                }}
+                                className={isExpanded ? 'btn-secondary' : 'btn-primary'}
+                                style={{
+                                  padding: '0.45rem 0.85rem',
+                                  fontSize: '0.78rem',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '0.35rem',
+                                  whiteSpace: 'nowrap',
+                                  backgroundColor: isExpanded ? '#fee2e2' : undefined,
+                                  color: isExpanded ? '#991b1b' : undefined,
+                                  borderColor: isExpanded ? '#fca5a5' : undefined,
+                                }}
+                              >
+                                {isExpanded ? (
+                                  <>
+                                    <X size={14} />
+                                    <span>{t('history.close_transcript') || 'Close Transcript'}</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <ChevronDown size={14} />
+                                    <span>{t('history.open_transcript') || 'View Transcript'}</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Expanded Transcript Drawer */}
+                          {isExpanded && (
+                            <div
+                              style={{
+                                padding: '1.5rem',
+                                borderTop: '1px solid var(--border-subtle)',
+                                backgroundColor: '#ffffff',
+                              }}
+                            >
+                              {callDetailLoading && selectedCallId === c.id ? (
+                                <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                                  <RefreshCw size={24} className="animate-spin" style={{ margin: '0 auto 0.5rem auto' }} />
+                                  <p style={{ margin: 0, fontSize: '0.85rem' }}>Loading conversation transcript...</p>
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                                  
+                                  {/* Top Farmer Context & Location Banner */}
+                                  <div
+                                    style={{
+                                      display: 'grid',
+                                      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                                      gap: '0.85rem',
+                                      padding: '1rem 1.25rem',
+                                      backgroundColor: 'var(--bg-subtle)',
+                                      borderRadius: 'var(--radius-md)',
+                                      fontSize: '0.8rem',
+                                      border: '1px solid var(--border-subtle)',
+                                    }}
+                                  >
+                                    <div>
+                                      <span style={{ color: 'var(--text-muted)', fontSize: '0.72rem', display: 'block' }}>Farmer Specific ID</span>
+                                      <strong style={{ color: 'var(--brand-forest-800)', fontSize: '0.85rem' }}>
+                                        {selectedCallDetail?.farmer_id || c.farmer_id}
+                                      </strong>
+                                    </div>
+
+                                    <div>
+                                      <span style={{ color: 'var(--text-muted)', fontSize: '0.72rem', display: 'block' }}>Farmer Location & Address</span>
+                                      <strong style={{ color: '#0f172a', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                        <MapPin size={13} color="var(--brand-forest-700)" />
+                                        {selectedCallDetail?.farmer_address || c.farmer_address}
+                                      </strong>
+                                    </div>
+
+                                    <div>
+                                      <span style={{ color: 'var(--text-muted)', fontSize: '0.72rem', display: 'block' }}>Caller Phone Contact</span>
+                                      <strong style={{ fontFamily: 'monospace', fontSize: '0.85rem', color: '#334155' }}>
+                                        {selectedCallDetail?.phone_display || c.phone_display}
+                                      </strong>
+                                    </div>
+
+                                    <div>
+                                      <span style={{ color: 'var(--text-muted)', fontSize: '0.72rem', display: 'block' }}>Consultation Timeline</span>
+                                      <strong style={{ color: '#334155', fontSize: '0.85rem' }}>
+                                        {selectedCallDetail?.duration_seconds || c.duration_seconds}s • {selectedCallDetail?.started_at || c.started_at}
+                                      </strong>
+                                    </div>
+                                  </div>
+
+                                  {/* Official Advisory Summary Highlight Card */}
+                                  <div
+                                    style={{
+                                      padding: '1.25rem 1.5rem',
+                                      borderRadius: 'var(--radius-md)',
+                                      backgroundColor: 'rgba(30, 86, 66, 0.04)',
+                                      border: '1px solid rgba(30, 86, 66, 0.18)',
+                                    }}
+                                  >
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                                      <Sprout size={18} color="var(--brand-forest-700)" />
+                                      <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                                        Official Agricultural Advisory Summary
+                                      </h4>
+                                      <span className="badge badge-success" style={{ fontSize: '0.68rem', marginLeft: 'auto' }}>
+                                        EIAR / MoA Verified
+                                      </span>
+                                    </div>
+                                    <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.9rem', color: '#1e293b', lineHeight: 1.6 }}>
+                                      {c.summary || c.last_answer || 'Complete agronomic recommendation delivered via 8028.'}
+                                    </p>
+                                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                      Grounded against Ethiopian Agricultural Research Institute (EIAR) knowledge corpus.
+                                    </span>
+                                  </div>
+
+                                  {/* Outbound SMS Gateway Preview (If Dispatched for this farmer) */}
+                                  {selectedCallDetail?.sms && (
+                                    <div
+                                      style={{
+                                        padding: '1.15rem 1.25rem',
+                                        borderRadius: 'var(--radius-md)',
+                                        backgroundColor: '#f0fdf4',
+                                        border: '1px solid #bbf7d0',
+                                      }}
+                                    >
+                                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                          <Send size={15} color="#15803d" />
+                                          <strong style={{ fontSize: '0.85rem', color: '#15803d' }}>
+                                            GSM SMS Advisory Sent to Farmer's Phone
+                                          </strong>
+                                        </div>
+                                        <span className="badge badge-success" style={{ fontSize: '0.68rem' }}>
+                                          {selectedCallDetail.sms.status} • {selectedCallDetail.sms.sent_at}
+                                        </span>
+                                      </div>
+                                      <div style={{ fontSize: '0.85rem', color: '#166534', fontFamily: 'inherit', lineHeight: 1.5 }}>
+                                        “{selectedCallDetail.sms.content}”
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Dialogue Turns Stream (Open & Closed) */}
+                                  <div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem' }}>
+                                      <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
+                                        Full Conversation Audio Transcript (8028)
+                                      </h4>
+                                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                        {(selectedCallDetail?.messages || []).length} turns recorded
+                                      </span>
+                                    </div>
+
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', maxHeight: '420px', overflowY: 'auto', paddingRight: '0.5rem' }}>
+                                      {(selectedCallDetail?.messages || []).length === 0 ? (
+                                        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: 0 }}>
+                                          No dialogue turns recorded for this call session.
+                                        </p>
+                                      ) : (
+                                        (selectedCallDetail?.messages || []).map((msg: any, idx: number) => {
+                                          const isCaller = msg.speaker === 'caller';
+                                          return (
+                                            <div
+                                              key={msg.id || idx}
+                                              style={{
+                                                display: 'flex',
+                                                flexDirection: 'column',
+                                                alignItems: isCaller ? 'flex-end' : 'flex-start',
+                                              }}
+                                            >
+                                              <div
+                                                style={{
+                                                  maxWidth: '78%',
+                                                  padding: '0.85rem 1.15rem',
+                                                  borderRadius: isCaller ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                                                  backgroundColor: isCaller ? 'var(--brand-forest-700)' : '#f1f5f9',
+                                                  color: isCaller ? '#ffffff' : '#0f172a',
+                                                  boxShadow: 'var(--shadow-sm)',
+                                                  fontSize: '0.9rem',
+                                                  lineHeight: 1.55,
+                                                }}
+                                              >
+                                                <div style={{ fontSize: '0.7rem', fontWeight: 700, marginBottom: '0.25rem', opacity: 0.85, display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
+                                                  <span>{isCaller ? `🧑‍🌾 Farmer (${selectedCallDetail?.location_name || 'Caller'})` : '🤖 Hello Farmer AI (8028 Assistant)'}</span>
+                                                  <span>{msg.created_at ? msg.created_at.split(' ')[1] : ''}</span>
+                                                </div>
+                                                <div style={{ wordBreak: 'break-word' }}>{msg.text}</div>
+                                              </div>
+                                            </div>
+                                          );
+                                        })
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Close Drawer Button */}
+                                  <div style={{ display: 'flex', justifyContent: 'center', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle)' }}>
+                                    <button
+                                      onClick={() => toggleCallTranscript(c.id)}
+                                      className="btn-secondary"
+                                      style={{ padding: '0.45rem 1.25rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+                                    >
+                                      <X size={14} />
+                                      <span>{t('history.close_transcript') || 'Close Transcript Drawer'}</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                  {callsList.length === 0 && (
+                    <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                      <PhoneIncoming size={32} style={{ margin: '0 auto 0.75rem auto', opacity: 0.5 }} />
+                      <p style={{ margin: 0, fontSize: '0.95rem' }}>{t('history.no_calls')}</p>
                     </div>
-                  ) : (
-                    <p style={{ color: 'var(--text-muted)' }}>Failed to load conversation.</p>
                   )}
                 </div>
               )}
 
-              {/* 8028 Telephony Call Records Table */}
-              <div className="card-interactive" style={{ padding: '1.75rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <PhoneIncoming size={20} color="var(--brand-forest-700)" />
-                    <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
-                      {t('history.call_logs')}
-                    </h3>
+              {/* 4. Outbound GSM SMS Dispatch Gateway Section */}
+              {historySectionTab !== 'calls' && (
+                <div className="card-interactive" style={{ padding: '1.75rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+                    <div>
+                      <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 800, color: 'var(--brand-forest-900)' }}>
+                        {t('history.sms_dispatched')}
+                      </h3>
+                      <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        Automated SMS summaries and early warning broadcasts sent to farmers across Ethiopian regions.
+                      </p>
+                    </div>
+                    <span className="badge badge-neutral" style={{ fontSize: '0.75rem' }}>
+                      Ethio Telecom GSM Gateway (Live)
+                    </span>
                   </div>
-                  <span className="badge badge-success">
-                    {callsList.length} Recorded Calls
-                  </span>
-                </div>
 
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
-                    <thead>
-                      <tr style={{ borderBottom: '2px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
-                        <th style={{ padding: '0.75rem' }}>{t('history.date')}</th>
-                        <th style={{ padding: '0.75rem' }}>{t('history.caller_id')}</th>
-                        <th style={{ padding: '0.75rem' }}>Language</th>
-                        <th style={{ padding: '0.75rem' }}>{t('history.duration')}</th>
-                        <th style={{ padding: '0.75rem' }}>{t('history.status')}</th>
-                        <th style={{ padding: '0.75rem' }}>Inquiry Preview</th>
-                        <th style={{ padding: '0.75rem' }}>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {callsList.length === 0 ? (
-                        <tr>
-                          <td colSpan={7} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
-                            {t('history.no_calls')}
-                          </td>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '2px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
+                          <th style={{ padding: '0.75rem' }}>{t('history.date')}</th>
+                          <th style={{ padding: '0.75rem' }}>Farmer ID & Contact</th>
+                          <th style={{ padding: '0.75rem' }}>Farmer Address</th>
+                          <th style={{ padding: '0.75rem' }}>{t('history.type')}</th>
+                          <th style={{ padding: '0.75rem' }}>{t('history.message')}</th>
+                          <th style={{ padding: '0.75rem' }}>Status</th>
+                          <th style={{ padding: '0.75rem' }}>Segments</th>
                         </tr>
-                      ) : (
-                        callsList.map((c: any) => (
-                          <tr key={c.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                            <td style={{ padding: '0.75rem', whiteSpace: 'nowrap' }}>{c.started_at}</td>
-                            <td style={{ padding: '0.75rem', fontFamily: 'monospace' }}>{c.caller_hash}</td>
+                      </thead>
+                      <tbody>
+                        {smsList.length === 0 ? (
+                          <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                            <td style={{ padding: '0.75rem' }}>2026-10-14 13:30</td>
                             <td style={{ padding: '0.75rem' }}>
-                              <span className="badge badge-neutral">
-                                {c.language === 'om' ? 'Afaan Oromoo' : 'አማርኛ'}
-                              </span>
+                              <strong style={{ color: 'var(--brand-forest-800)', display: 'block' }}>ETH-FARM-80280419</strong>
+                              <span style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: 'var(--text-muted)' }}>+251 911 ••• 7864</span>
                             </td>
-                            <td style={{ padding: '0.75rem', whiteSpace: 'nowrap' }}>{c.duration_seconds}s</td>
+                            <td style={{ padding: '0.75rem' }}>Adama Woreda, East Shewa, Oromia</td>
                             <td style={{ padding: '0.75rem' }}>
-                              <span className={`badge ${c.end_reason === 'completed' ? 'badge-success' : 'badge-warning'}`}>
-                                {c.end_reason === 'completed' ? 'COMPLETED' : c.end_reason?.toUpperCase()}
-                              </span>
-                            </td>
-                            <td style={{ padding: '0.75rem', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {c.first_question || 'Dial-in session'}
+                              <span className="badge badge-success">CALL SUMMARY</span>
                             </td>
                             <td style={{ padding: '0.75rem' }}>
-                              <button
-                                onClick={() => handleViewCallDetail(c.id)}
-                                className="btn-primary"
-                                style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
-                              >
-                                {t('history.view_transcript')}
-                              </button>
+                              {language === 'om'
+                                ? 'Baalli xaafii keessan akka hin keellofneef yaa\'a bishaanii eegaa.'
+                                : language === 'am'
+                                ? 'የጤፍ ቅጠል ቢጫ መሆኑን አስመልክቶ የውሃ ማቆር አለመኖሩን ያረጋግጡ።'
+                                : 'Check drainage furrows to prevent waterlogging on teff fields.'}
                             </td>
+                            <td style={{ padding: '0.75rem' }}>
+                              <span className="badge badge-success">DELIVERED</span>
+                            </td>
+                            <td style={{ padding: '0.75rem' }}>1 seg</td>
                           </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
+                        ) : (
+                          smsList
+                            .filter((m: any) => {
+                              const q = historySearchQuery.toLowerCase();
+                              return (
+                                !q ||
+                                (m.farmer_id || '').toLowerCase().includes(q) ||
+                                (m.phone_display || '').toLowerCase().includes(q) ||
+                                (m.recipient_hash || '').toLowerCase().includes(q) ||
+                                (m.farmer_address || '').toLowerCase().includes(q) ||
+                                (m.content || '').toLowerCase().includes(q)
+                              );
+                            })
+                            .map((m: any) => (
+                              <tr key={m.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                                <td style={{ padding: '0.75rem', whiteSpace: 'nowrap', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                                  {m.sent_at}
+                                </td>
+                                <td style={{ padding: '0.75rem' }}>
+                                  <strong style={{ color: 'var(--brand-forest-800)', display: 'block', fontSize: '0.825rem' }}>
+                                    {m.farmer_id || 'ETH-FARM-REG'}
+                                  </strong>
+                                  <span style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: 'var(--text-muted)' }}>
+                                    {m.phone_display || m.recipient_hash}
+                                  </span>
+                                </td>
+                                <td style={{ padding: '0.75rem', fontSize: '0.8rem', color: 'var(--brand-forest-700)' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                                    <MapPin size={12} />
+                                    <span>{m.farmer_address || 'Adama, East Shewa, Oromia'}</span>
+                                  </div>
+                                </td>
+                                <td style={{ padding: '0.75rem' }}>
+                                  <span className={`badge ${m.message_type === 'warning' ? 'badge-warning' : 'badge-success'}`} style={{ fontSize: '0.7rem' }}>
+                                    {m.message_type?.toUpperCase() === 'WARNING' ? 'WEATHER WARNING' : 'ADVISORY SUMMARY'}
+                                  </span>
+                                </td>
+                                <td style={{ padding: '0.75rem', maxWidth: '380px', lineHeight: 1.5, color: '#1e293b' }}>
+                                  {m.content}
+                                </td>
+                                <td style={{ padding: '0.75rem' }}>
+                                  <span className="badge badge-success" style={{ fontSize: '0.68rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                                    <Check size={11} />
+                                    <span>{m.status || 'DELIVERED'}</span>
+                                  </span>
+                                </td>
+                                <td style={{ padding: '0.75rem', whiteSpace: 'nowrap', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                                  {m.segments_count || 1} seg
+                                </td>
+                              </tr>
+                            ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
-
-              {/* GSM SMS Dispatch Gateway Table */}
-              <div className="card-interactive" style={{ padding: '1.75rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                  <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--brand-forest-800)' }}>
-                    {t('history.sms_dispatched')}
-                  </h3>
-                  <span className="badge badge-neutral">GSM SMS Gateway (Simulated / Local)</span>
-                </div>
-
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.85rem' }}>
-                    <thead>
-                      <tr style={{ borderBottom: '2px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
-                        <th style={{ padding: '0.75rem' }}>{t('history.date')}</th>
-                        <th style={{ padding: '0.75rem' }}>{t('history.recipient')}</th>
-                        <th style={{ padding: '0.75rem' }}>{t('history.type')}</th>
-                        <th style={{ padding: '0.75rem' }}>{t('history.message')}</th>
-                        <th style={{ padding: '0.75rem' }}>Segments</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {smsList.length === 0 ? (
-                        <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                          <td style={{ padding: '0.75rem' }}>2026-10-09 10:40</td>
-                          <td style={{ padding: '0.75rem', fontFamily: 'monospace' }}>#50e05bfd...</td>
-                          <td style={{ padding: '0.75rem' }}>
-                            <span className="badge badge-success">CALL SUMMARY</span>
-                          </td>
-                          <td style={{ padding: '0.75rem' }}>
-                            {language === 'om'
-                              ? 'Baalli xaafii keessan akka hin keellofneef yaa\'a bishaanii eegaa.'
-                              : language === 'am'
-                              ? 'የጤፍ ቅጠል ቢጫ መሆኑን አስመልክቶ የውሃ ማቆር አለመኖሩን ያረጋግጡ።'
-                              : 'Check drainage furrows to prevent waterlogging on teff fields.'}
-                          </td>
-                          <td style={{ padding: '0.75rem' }}>1 seg</td>
-                        </tr>
-                      ) : (
-                        smsList.map((m: any) => (
-                          <tr key={m.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                            <td style={{ padding: '0.75rem', whiteSpace: 'nowrap' }}>{m.sent_at}</td>
-                            <td style={{ padding: '0.75rem', fontFamily: 'monospace' }}>{m.recipient_hash}</td>
-                            <td style={{ padding: '0.75rem' }}>
-                              <span className={`badge ${m.message_type === 'warning' ? 'badge-warning' : 'badge-success'}`}>
-                                {m.message_type?.toUpperCase()}
-                              </span>
-                            </td>
-                            <td style={{ padding: '0.75rem' }}>{m.content}</td>
-                            <td style={{ padding: '0.75rem', whiteSpace: 'nowrap' }}>{m.segments_count} seg</td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              )}
             </div>
           )}
 

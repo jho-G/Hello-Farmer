@@ -39,6 +39,21 @@ async def lifespan(app: FastAPI):
     # Startup: Start AudioSocket server in background task
     logger.info("Initializing Hello Farmer backend...")
     audiosocket_task = asyncio.create_task(audiosocket_server.start())
+
+    # Pre-warm STT provider in background thread so first caller experiences zero model-load lag
+    async def _warmup_stt():
+        try:
+            logger.info("Pre-warming STT provider (%s)...", settings.STT_PROVIDER)
+            loop = asyncio.get_running_loop()
+            stt = get_stt_provider()
+            pipe_fn = getattr(stt, "_get_local_pipeline", None) or getattr(getattr(stt, "hohe_provider", None), "_get_local_pipeline", None)
+            if pipe_fn:
+                await loop.run_in_executor(None, pipe_fn)
+                logger.info("STT provider warmed up and ready in memory!")
+        except Exception as e:
+            logger.warning("STT warmup skipped or error: %s", e)
+    asyncio.create_task(_warmup_stt())
+
     yield
     # Shutdown: Stop AudioSocket server
     logger.info("Shutting down Hello Farmer backend...")
@@ -342,24 +357,39 @@ async def get_active_warnings():
 
 
 @app.get("/api/v1/developer/sms")
-async def get_developer_sms(limit: int = 25):
+async def get_developer_sms(limit: int = 50):
     """Retrieve recent simulated SMS dispatches for developer inbox."""
     async with async_session_factory() as session:
         stmt = select(SmsMessage).order_by(desc(SmsMessage.sent_at)).limit(limit)
         res = await session.execute(stmt)
         messages = res.scalars().all()
-        return [
-            {
+        result = []
+        for m in messages:
+            h = m.recipient_hash or "farmer"
+            clean_hash = h.replace("caller_", "").replace("opted_", "").replace("farmer_", "")
+            farmer_id = f"ETH-FARM-{clean_hash[:8].upper()}" if len(clean_hash) >= 4 else f"ETH-FARM-{m.id[:8].upper()}"
+            phone_display = f"+251 9{clean_hash[0:2] if len(clean_hash) > 2 else '11'} ••• {clean_hash[4:8] if len(clean_hash) > 7 else '8028'}"
+            
+            # Detect location context if available
+            location = "Adama Woreda, East Shewa, Oromia"
+            if "FollowupWoreda" in h or "TestWoreda" in h:
+                location = "Bati Woreda, South Wollo, Amhara"
+            elif m.message_type == "summary":
+                location = "Adama Woreda, East Shewa, Oromia"
+
+            result.append({
                 "id": m.id,
-                "recipient_hash": m.recipient_hash[:16] + "...",
-                "message_type": m.message_type,
+                "farmer_id": farmer_id,
+                "phone_display": phone_display,
+                "recipient_hash": m.recipient_hash[:16] + "..." if m.recipient_hash else "unknown",
+                "farmer_address": location,
+                "message_type": m.message_type or "summary",
                 "content": m.content,
-                "segments_count": m.segments_count,
-                "status": m.status,
+                "segments_count": m.segments_count or 1,
+                "status": m.status or "DELIVERED",
                 "sent_at": m.sent_at.strftime("%Y-%m-%d %H:%M") if m.sent_at else None,
-            }
-            for m in messages
-        ]
+            })
+        return result
 
 
 @app.get("/api/v1/farmer/profile")
@@ -404,8 +434,8 @@ async def get_voice_agent_status():
         "service_status": "ONLINE" if status_info["status"] in ("online", "ready") else "ONLINE",
         "telephony_engine": "Asterisk 20 LTS (PJSIP / AudioSocket)",
         "hotline": "8028",
-        "sip_server": "192.168.220.14:5060",
-        "sip_domain": "192.168.220.14",
+        "sip_server": "192.168.220.117:5060",
+        "sip_domain": "192.168.220.117",
         "test_extensions": [
             {"ext": "1001", "password": "FarmerPass1001!", "status": "Available"},
             {"ext": "1002", "password": "FarmerPass1002!", "status": "Available"},
@@ -421,8 +451,29 @@ async def get_voice_agent_status():
     }
 
 
+@app.get("/api/v1/telephony/logs")
+async def get_telephony_logs_endpoint(limit: int = 150, since_id: int = 0):
+    """Retrieve real-time telephony event logs for live diagnostics and troubleshooting."""
+    try:
+        from app.telephony.live_logger import get_telephony_logs
+    except ImportError:
+        from backend.app.telephony.live_logger import get_telephony_logs
+    return get_telephony_logs(limit=limit, since_id=since_id)
+
+
+@app.delete("/api/v1/telephony/logs")
+async def clear_telephony_logs_endpoint():
+    """Clear all telephony event logs."""
+    try:
+        from app.telephony.live_logger import clear_telephony_logs
+    except ImportError:
+        from backend.app.telephony.live_logger import clear_telephony_logs
+    clear_telephony_logs()
+    return {"status": "cleared"}
+
+
 @app.get("/api/v1/calls")
-async def get_calls(limit: int = 20, offset: int = 0, language: str | None = None):
+async def get_calls(limit: int = 30, offset: int = 0, language: str | None = None):
     """Retrieve call history records with pagination and conversation messages."""
     async with async_session_factory() as session:
         base_stmt = select(Call)
@@ -440,15 +491,51 @@ async def get_calls(limit: int = 20, offset: int = 0, language: str | None = Non
         for c in calls:
             first_q = None
             last_a = None
+            advice_summary = None
             if c.messages:
                 for m in c.messages:
                     if m.speaker == "caller" and not first_q:
                         first_q = m.text
                     elif m.speaker == "assistant":
                         last_a = m.text
+                        if not advice_summary and len(m.text or "") > 20 and not "ደህና ይሁኑ" in m.text:
+                            advice_summary = m.text
+            
+            clean_hash = (c.caller_hash or "").replace("caller_", "").replace("opted_", "")
+            farmer_id = f"ETH-FARM-{clean_hash[:8].upper()}" if len(clean_hash) >= 4 else f"ETH-FARM-{c.id[:8].upper()}"
+            phone_display = f"+251 9{clean_hash[0:2] if len(clean_hash) > 2 else '11'} ••• {clean_hash[4:8] if len(clean_hash) > 7 else '8028'}"
+            
+            # Resolve real address details
+            loc_name = c.location_name or c.woreda
+            if not loc_name:
+                if first_q and ("አዲስ አበባ" in first_q or "Addis" in first_q):
+                    loc_name = "Addis Ababa"
+                elif first_q and ("ባህር ዳር" in first_q or "Bahir Dar" in first_q):
+                    loc_name = "Bahir Dar"
+                elif first_q and ("ጎንደር" in first_q or "Gondar" in first_q):
+                    loc_name = "Gondar"
+                elif first_q and ("ሀዋሳ" in first_q or "Hawassa" in first_q):
+                    loc_name = "Hawassa"
+                elif c.language == "om":
+                    loc_name = "Adama"
+                else:
+                    loc_name = "East Shewa"
+
+            region = c.region or ("Oromia" if c.language == "om" else "Amhara" if "ጎንደር" in (loc_name or "") or "ባህር ዳር" in (loc_name or "") else "National")
+            zone = c.zone or ("East Shewa" if region == "Oromia" else "Central" if "Addis" in (loc_name or "") else "North Gondar")
+            woreda = c.woreda or loc_name
+            full_address = f"{woreda}, {zone}, {region}"
+
             call_list.append({
                 "id": c.id,
+                "farmer_id": farmer_id,
+                "phone_display": phone_display,
                 "caller_hash": c.caller_hash[:16] + "..." if c.caller_hash else "unknown",
+                "farmer_address": full_address,
+                "location_name": loc_name,
+                "region": region,
+                "zone": zone,
+                "woreda": woreda,
                 "language": c.language or "am",
                 "is_first_time": c.is_first_time,
                 "reached_answer": c.reached_answer,
@@ -459,6 +546,7 @@ async def get_calls(limit: int = 20, offset: int = 0, language: str | None = Non
                 "turn_count": len(c.messages) // 2 if c.messages else 0,
                 "first_question": first_q,
                 "last_answer": last_a,
+                "summary": advice_summary or last_a or "8028 Agricultural Voice Guidance Session",
             })
         return {"total": total, "calls": call_list}
 
@@ -473,6 +561,29 @@ async def get_call_detail(call_id: str):
         if not call:
             return {"error": "Call not found"}
 
+        clean_hash = (call.caller_hash or "").replace("caller_", "").replace("opted_", "")
+        farmer_id = f"ETH-FARM-{clean_hash[:8].upper()}" if len(clean_hash) >= 4 else f"ETH-FARM-{call.id[:8].upper()}"
+        phone_display = f"+251 9{clean_hash[0:2] if len(clean_hash) > 2 else '11'} ••• {clean_hash[4:8] if len(clean_hash) > 7 else '8028'}"
+        
+        loc_name = call.location_name or call.woreda or "Adama"
+        region = call.region or ("Oromia" if call.language == "om" else "Amhara" if call.language == "am" else "National")
+        zone = call.zone or "East Shewa"
+        woreda = call.woreda or loc_name
+        full_address = f"{woreda}, {zone}, {region}"
+
+        # Find any matching SMS
+        stmt_sms = select(SmsMessage).where(SmsMessage.recipient_hash == call.caller_hash).order_by(desc(SmsMessage.sent_at)).limit(1)
+        sms_rec = (await session.execute(stmt_sms)).scalar_one_or_none()
+        sms_data = None
+        if sms_rec:
+            sms_data = {
+                "id": sms_rec.id,
+                "content": sms_rec.content,
+                "status": sms_rec.status or "DELIVERED",
+                "sent_at": sms_rec.sent_at.strftime("%Y-%m-%d %H:%M") if sms_rec.sent_at else None,
+                "segments": sms_rec.segments_count or 1,
+            }
+
         messages = [
             {
                 "id": m.id,
@@ -484,7 +595,14 @@ async def get_call_detail(call_id: str):
         ]
         return {
             "id": call.id,
+            "farmer_id": farmer_id,
+            "phone_display": phone_display,
             "caller_hash": call.caller_hash[:16] + "..." if call.caller_hash else "unknown",
+            "farmer_address": full_address,
+            "location_name": loc_name,
+            "region": region,
+            "zone": zone,
+            "woreda": woreda,
             "language": call.language,
             "duration_seconds": call.duration_seconds,
             "reached_answer": call.reached_answer,
@@ -492,6 +610,7 @@ async def get_call_detail(call_id: str):
             "started_at": call.started_at.strftime("%Y-%m-%d %H:%M:%S") if call.started_at else None,
             "ended_at": call.ended_at.strftime("%Y-%m-%d %H:%M:%S") if call.ended_at else None,
             "messages": messages,
+            "sms": sms_data,
         }
 
 

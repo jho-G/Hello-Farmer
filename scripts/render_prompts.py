@@ -12,178 +12,199 @@ from pathlib import Path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from backend.app.audio.convert import pcm8k_to_wav
-from backend.app.tts.edge_tts_provider import EdgeTTSProvider
+try:
+    from backend.app.tts.gemini_tts_provider import GeminiTTSProvider
+    from backend.app.tts.edge_tts_provider import EdgeTTSProvider
+except ImportError:
+    from app.tts.gemini_tts_provider import GeminiTTSProvider
+    from app.tts.edge_tts_provider import EdgeTTSProvider
 
 PROMPTS_SPEC = {
-    # Amharic Prompts
+    # ----------------------------------------------------
+    # Amharic Prompts (Gemini TTS Voice: Kore)
+    # ----------------------------------------------------
     "greeting_am.wav": {
         "lang": "am",
-        "voice": "am-ET-MekdesNeural",
-        "text": "እንኳን ወደ ሄሎ ፋርመር የሙከራ የግብርና ረዳት በደህና መጡ። ጥያቄዎን በቀጥታ መናገር ይችላሉ።",
+        "voice": "Kore",
+        "rate": "-15%",
+        "text": "ሰላም፣ ወደ ሄሎ ፋርመር እንኳን ደህና መጡ። አገልግሎታችንን ለማሻሻል፣ ይህ ጥሪ እየተቀዳ ነው።",
     },
-    "consent_am.wav": {
+    "ask_location_am.wav": {
         "lang": "am",
-        "voice": "am-ET-MekdesNeural",
-        "text": "ይህ አገልግሎት እንዲሻሻል ጥያቄዎ እንዲቀመጥ ይፈቅዳሉ?",
+        "voice": "Kore",
+        "rate": "-13%",
+        "text": "ከየትኛው አካባቢ ነው የሚደውሉት?",
     },
-    "one_moment_am.wav": {
+    "greeting_location_am.wav": {
         "lang": "am",
-        "voice": "am-ET-MekdesNeural",
-        "text": "እባክዎ ትንሽ ይጠብቁ...",
+        "voice": "Kore",
+        "rate": "-15%",
+        "text": "ሰላም፣ ወደ ሄሎ ፋርመር እንኳን ደህና መጡ። ከየትኛው አካባቢ ነው የሚደውሉት?",
     },
-    "low_confidence_am.wav": {
+    "clarify_region_am.wav": {
         "lang": "am",
-        "voice": "am-ET-MekdesNeural",
-        "text": "ይቅርታ፣ ድምጽዎ በደንብ አልተሰማም። እባክዎ ጥያቄዎን በድጋሚ ይናገሩ።",
+        "voice": "Kore",
+        "rate": "-13%",
+        "text": "በየትኛው ክልል ውስጥ ነው?",
+    },
+    "ask_problem_am.wav": {
+        "lang": "am",
+        "voice": "Kore",
+        "text": "ዛሬ በምን የግብርና ችግር ልርዳዎ?",
     },
     "repeat_prompt_am.wav": {
         "lang": "am",
-        "voice": "am-ET-MekdesNeural",
-        "text": "ይቅርታ፣ ድምጽዎ በደንብ አልተሰማም። እባክዎ ጥያቄዎን በድጋሚ ይናገሩ።",
+        "voice": "Kore",
+        "text": "ይቅርታ፣ አልተሰማኝም። እባክዎ ጥያቄዎን በድጋሚ ይናገሩ።",
     },
     "safe_fallback_am.wav": {
         "lang": "am",
-        "voice": "am-ET-MekdesNeural",
-        "text": "ይቅርታ፣ ለዚህ ጥያቄ በቂ የተረጋገጠ መረጃ አላገኘሁም። እባክዎ የአካባቢዎን የግብርና ልማት ጣቢያ ባለሙያ ያማክሩ ወይም በስምንት ዜሮ ሁለት ስምንት ይደውሉ።",
+        "voice": "Kore",
+        "text": "ይቅርታ፣ ለዚህ ጥያቄ የተረጋገጠ መረጃ አላገኘሁም። እባክዎ የአካባቢዎን የግብርና ልማት ጣቢያ ባለሙያ ያማክሩ ወይም በስምንት ዜሮ ሁለት ስምንት ይደውሉ።",
     },
     "goodbye_am.wav": {
         "lang": "am",
         "voice": "am-ET-MekdesNeural",
         "text": "ስለደወሉ እናመሰግናለን። ደህና ይሁኑ።",
     },
+    "anything_else_am.wav": {
+        "lang": "am",
+        "voice": "am-ET-MekdesNeural",
+        "text": "ሌላ የምረዳዎት የግብርና ጥያቄ አለዎት?",
+    },
+    "one_moment_am.wav": {
+        "lang": "am",
+        "voice": "am-ET-MekdesNeural",
+        "text": "እባክዎ ትንሽ ይጠብቁ፣ መረጃውን እየፈለግሁ ነው።",
+    },
     "error_am.wav": {
         "lang": "am",
         "voice": "am-ET-MekdesNeural",
-        "text": "ይቅርታ፣ የስርዓት መቆራረጥ አጋጥሟል። እባክዎ የአካባቢዎን የግብርና ባለሙያ ያማክሩ።",
+        "text": "ይቅርታ፣ የቴክኒክ ችግር አጋጥሟል። እባክዎ ቆየት ብለው ይደውሉ።",
     },
-    # Afaan Oromo Prompts (Unified with Mekdes for consistent female persona)
-    # Location-Aware Conversation Prompts (Amharic)
-    "greeting_am.wav": {
-        "lang": "am",
-        "voice": "am-ET-MekdesNeural",
-        "text": "ሰላም፣ ወደ ሄሎ ፋርመር እንኳን ደህና መጡ። አገልግሎታችንን ለማሻሻል ይህ ጥሪ እየተቀዳ ነው። ከየትኛው ከተማ ወይም አካባቢ እየደወሉ ነው?",
-    },
-    "greeting_location_am.wav": {
-        "lang": "am",
-        "voice": "am-ET-MekdesNeural",
-        "text": "ሰላም፣ ወደ ሄሎ ፋርመር እንኳን ደህና መጡ። አገልግሎታችንን ለማሻሻል ይህ ጥሪ እየተቀዳ ነው። ከየትኛው ከተማ ወይም አካባቢ እየደወሉ ነው?",
-    },
-    "clarify_region_am.wav": {
-        "lang": "am",
-        "voice": "am-ET-MekdesNeural",
-        "text": "በየትኛው ክልል ውስጥ ነው?",
-    },
-    "ask_problem_am.wav": {
-        "lang": "am",
-        "voice": "am-ET-MekdesNeural",
-        "text": "አመሰግናለሁ። በሰብልዎ ወይም በእንስሳትዎ ላይ ምን ችግር አጋጥሟል? በራስዎ አነጋገር ይንገሩኝ።",
-    },
-    # Afaan Oromo Prompts (Unified with Mekdes for consistent female persona)
+
+    # ----------------------------------------------------
+    # Afaan Oromo Prompts (Gemini TTS Voice: Kore)
+    # ----------------------------------------------------
     "greeting_om.wav": {
         "lang": "om",
-        "voice": "am-ET-MekdesNeural",
-        "text": "Nagaa, baga gara Hello Farmer nagaan dhuftan. Tajaajila keenya fooyyessuuf wamichi kun waraabamaa jira. Magaalaa ykn naannoo kam irraa bilbilaa jirtu?",
+        "voice": "Kore",
+        "text": "Akkam, baga gara Hello Farmer nagaan dhuftan. Tajaajila keenya fooyyessuuf wamichi kun waraabamaa jira.",
+    },
+    "ask_location_om.wav": {
+        "lang": "om",
+        "voice": "Kore",
+        "text": "Naannoo kam irraa bilbilaa jirtu?",
     },
     "greeting_location_om.wav": {
         "lang": "om",
-        "voice": "am-ET-MekdesNeural",
-        "text": "Nagaa, baga gara Hello Farmer nagaan dhuftan. Tajaajila keenya fooyyessuuf wamichi kun waraabamaa jira. Magaalaa ykn naannoo kam irraa bilbilaa jirtu?",
+        "voice": "Kore",
+        "text": "Naannoo kam irraa bilbilaa jirtu?",
     },
     "clarify_region_om.wav": {
         "lang": "om",
-        "voice": "am-ET-MekdesNeural",
+        "voice": "Kore",
         "text": "Naannoo kam keessatti argama?",
     },
     "ask_problem_om.wav": {
         "lang": "om",
-        "voice": "am-ET-MekdesNeural",
-        "text": "Galatoomaa. Midhaan ykn beellada keessan irratti maaltu ta'e? Jecha mataa keessaniin natti himaa.",
+        "voice": "Kore",
+        "text": "Har'a rakkoo qonnaa maaliin isin gargaaruu danda'a?",
     },
-    "consent_om.wav": {
+    "repeat_prompt_om.wav": {
+        "lang": "om",
+        "voice": "Kore",
+        "text": "Dhiifama, hin dhagahamne. Maaloo irra deebi'aa dubbadhaa.",
+    },
+    "safe_fallback_om.wav": {
+        "lang": "om",
+        "voice": "Kore",
+        "text": "Dhiifama, gaaffii kanaaf ragaan gahaan hin jiru. Maaloo ogeessa qonnaa naannoo keessanii gaafadhaa yookiin saddeet-duwwaa-lama-saddeet irratti bilbilaa.",
+    },
+    "goodbye_om.wav": {
+        "lang": "om",
+        "voice": "Kore",
+        "text": "Waan bilbiltaniif galatoomaa. Nagaatti.",
+    },
+    "anything_else_om.wav": {
         "lang": "om",
         "voice": "am-ET-MekdesNeural",
-        "text": "Tajaajilli kun akka fooyya'uuf gaaffiin keessan akka galmaa'u ni eeyyamtuu?",
+        "text": "Gaaffii qonnaa biraa isin gargaaruu danda'u qabduu?",
     },
     "one_moment_om.wav": {
         "lang": "om",
         "voice": "am-ET-MekdesNeural",
-        "text": "Mee xiqqoo eegaa...",
-    },
-    "low_confidence_om.wav": {
-        "lang": "om",
-        "voice": "am-ET-MekdesNeural",
-        "text": "Dhiifama, sagaleen keessan sirriitti hin dhagahamne. Maaloo irra deebi'aa dubbadhaa.",
-    },
-    "repeat_prompt_om.wav": {
-        "lang": "om",
-        "voice": "am-ET-MekdesNeural",
-        "text": "Dhiifama, sagaleen keessan sirriitti hin dhagahamne. Maaloo irra deebi'aa dubbadhaa.",
-    },
-    "safe_fallback_om.wav": {
-        "lang": "om",
-        "voice": "am-ET-MekdesNeural",
-        "text": "Dhiifama, gaaffii kanaaf ragaan amansiisaan gahaan hin jiru. Maaloo ogeessa misooma qonnaa naannoo keessanii gaafadhaa yookiin bilbila saddeet-duwwaa-lama-saddeet irratti bilbilaa.",
-    },
-    "goodbye_om.wav": {
-        "lang": "om",
-        "voice": "am-ET-MekdesNeural",
-        "text": "Waan bilbiltaniif galatoomaa. Nagaatti.",
+        "text": "Maaloo yeroo gabaabaaf eegaa, odeeffannoo barbaadaa jira.",
     },
     "error_om.wav": {
         "lang": "om",
-        "voice": "am-ET-MekdesNeural",
-        "text": "Dhiifama, rakkoon teeknikaa mudateera. Maaloo ogeessa qonnaa naannoo keessanii gaafadhaa.",
+        "voice": "Kore",
+        "text": "Dhiifama, rakkoon teeknikaa mudateera. Maaloo booda bilbilaa.",
     },
+
+    # ----------------------------------------------------
     # English Prompts
+    # ----------------------------------------------------
     "greeting_en.wav": {
         "lang": "en",
-        "voice": "en-US-JennyNeural",
-        "text": "Hello, welcome to Hello Farmer. This call is being recorded to help us improve our service. Which town or nearby city are you calling from?",
+        "voice": "Kore",
+        "text": "Hello, welcome to Hello Farmer. This call is being recorded to improve our service.",
+    },
+    "ask_location_en.wav": {
+        "lang": "en",
+        "voice": "Kore",
+        "text": "Which area are you calling from?",
     },
     "greeting_location_en.wav": {
         "lang": "en",
-        "voice": "en-US-JennyNeural",
-        "text": "Hello, welcome to Hello Farmer. This call is being recorded to help us improve our service. Which town or nearby city are you calling from?",
+        "voice": "Kore",
+        "text": "Which area are you calling from?",
     },
     "clarify_region_en.wav": {
         "lang": "en",
-        "voice": "en-US-JennyNeural",
+        "voice": "Kore",
         "text": "Which region is that in?",
     },
     "ask_problem_en.wav": {
         "lang": "en",
-        "voice": "en-US-JennyNeural",
-        "text": "Thank you. What is happening with your crops or livestock? Please explain it in your own words.",
-    },
-    "low_confidence_en.wav": {
-        "lang": "en",
-        "voice": "en-US-JennyNeural",
-        "text": "Sorry, I could not hear you clearly. Please repeat your question.",
+        "voice": "Kore",
+        "text": "What farming problem can I help you with today?",
     },
     "repeat_prompt_en.wav": {
         "lang": "en",
-        "voice": "en-US-JennyNeural",
+        "voice": "Kore",
         "text": "Sorry, I could not hear you clearly. Please repeat your question.",
     },
     "safe_fallback_en.wav": {
         "lang": "en",
-        "voice": "en-US-JennyNeural",
+        "voice": "Kore",
         "text": "Sorry, there is no verified information available for this query. Please consult your local agricultural development agent or call eight zero two eight.",
     },
     "goodbye_en.wav": {
         "lang": "en",
+        "voice": "Kore",
+        "text": "Thank you for calling Hello Farmer. Goodbye.",
+    },
+    "anything_else_en.wav": {
+        "lang": "en",
         "voice": "en-US-JennyNeural",
-        "text": "Thank you for calling. Goodbye.",
+        "text": "Do you have any other farming question I can help you with?",
+    },
+    "one_moment_en.wav": {
+        "lang": "en",
+        "voice": "en-US-JennyNeural",
+        "text": "Please hold on for a moment while I retrieve the information.",
     },
     "error_en.wav": {
         "lang": "en",
-        "voice": "en-US-JennyNeural",
-        "text": "Sorry, a technical error occurred. Please consult your local extension agent.",
+        "voice": "Kore",
+        "text": "Sorry, a technical error occurred. Please call back later.",
     },
-    # Bilingual Initial Greeting (Unified with Mekdes)
+    # Bilingual Initial Greeting (Unified with Kore)
     "greeting_bilingual.wav": {
         "lang": "am",
-        "voice": "am-ET-MekdesNeural",
+        "voice": "Kore",
+        "rate": "-15%",
         "text": "ሰላም፣ ወደ ሄሎ ፋርመር እንኳን ደህና መጡ። Baga gara Heelo Faarmar nagaan dhuftan.",
     },
 }
@@ -194,7 +215,7 @@ import argparse
 
 async def render_prompts(lang_filter: str = "all", target_dir: str = "backend/cache/prompts"):
     print("=" * 80)
-    print("HELLO FARMER: RENDERING FIXED TELEPHONY PROMPT WAVs")
+    print("HELLO FARMER: RENDERING FIXED TELEPHONY PROMPT WAVs (GEMINI-FIRST)")
     print(f"Filter language: {lang_filter} | Output directory: {target_dir}")
     print("=" * 80)
 
@@ -211,11 +232,16 @@ async def render_prompts(lang_filter: str = "all", target_dir: str = "backend/ca
 
     for filename, spec in items_to_render.items():
         out_path = prompt_dir / filename
-        pcm_8k = await tts_provider.synthesize(
-            spec["text"],
-            voice=spec["voice"],
-            language=spec["lang"]
-        )
+        try:
+            pcm_8k = await tts_provider.synthesize(
+                spec["text"],
+                voice=None,
+                language=spec["lang"],
+                rate=spec.get("rate"),
+            )
+        except Exception as e:
+            print(f"  ✗ TTS synthesis error for {filename}: {e}")
+            pcm_8k = None
 
         if pcm_8k:
             wav_data = pcm8k_to_wav(pcm_8k)

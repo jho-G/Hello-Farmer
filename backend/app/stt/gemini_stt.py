@@ -51,8 +51,10 @@ class GeminiSTTProvider(BaseSTTProvider):
         self.model_name = (
             model_name
             or getattr(settings, "GEMINI_STT_MODEL", None)
-            or getattr(settings, "STT_GEMINI_MODEL", "gemini-3.5-transcribe")
+            or getattr(settings, "STT_GEMINI_MODEL", "gemini-3.5-flash-lite")
         )
+        if self.model_name == "gemini-3.5-transcribe":
+            self.model_name = "gemini-3.5-flash-lite"
         self._fallback_provider = fallback_provider
         self._genai_client = None
         self._legacy_genai = None
@@ -156,8 +158,50 @@ class GeminiSTTProvider(BaseSTTProvider):
     async def transcribe(self, wav_path_or_bytes: str | bytes, language: str = "am") -> Transcript:
         """Transcribe farmer speech using Gemini API with bounded fallback."""
         start_time = time.perf_counter()
-        lang_code = "om" if language in ("om", "oromo") else "am"
-        lang_name = "Amharic (አማርኛ in Ge'ez script)" if lang_code == "am" else "Afaan Oromo (in Latin Qubee script)"
+        raw_lang = (language or "am").lower().strip()
+        if raw_lang in ("om", "oromo", "afaan_oromo"):
+            lang_code = "om"
+            lang_name = "Afaan Oromo (using Latin Qubee script)"
+            instruction = (
+                f"Transcribe this speech accurately in original {lang_name}. "
+                "Do NOT translate into English or add commentary. Return ONLY the transcription text verbatim."
+            )
+        elif raw_lang in ("ti", "tigrinya", "tigrigna"):
+            lang_code = "ti"
+            lang_name = "Tigrinya (ትግርኛ using Ge'ez Fidel script)"
+            instruction = (
+                f"Transcribe this speech accurately in original {lang_name}. "
+                "Do NOT translate into English or add commentary. Return ONLY the transcription text verbatim."
+            )
+        elif raw_lang in ("so", "somali", "soomaali"):
+            lang_code = "so"
+            lang_name = "Somali (Af-Soomaali using Latin script)"
+            instruction = (
+                f"Transcribe this speech accurately in original {lang_name}. "
+                "Do NOT translate into English or add commentary. Return ONLY the transcription text verbatim."
+            )
+        elif raw_lang in ("en", "english"):
+            lang_code = "en"
+            lang_name = "English"
+            instruction = (
+                "Transcribe this speech accurately in English. "
+                "Return ONLY the transcription text verbatim."
+            )
+        elif raw_lang in ("auto", "detect"):
+            lang_code = "auto"
+            lang_name = "Ethiopian languages (Amharic, Afaan Oromo, Tigrinya, Somali, or English)"
+            instruction = (
+                "Identify the spoken language among Amharic, Afaan Oromo, Tigrinya, Somali, or English, "
+                "and transcribe the speech verbatim in that language's native script. "
+                "Do NOT translate into English. Return ONLY the transcribed text."
+            )
+        else:
+            lang_code = "am"
+            lang_name = "Amharic (አማርኛ using Ethiopic Fidel script)"
+            instruction = (
+                f"Transcribe this speech accurately in authentic {lang_name}. "
+                "Do NOT translate into English or add commentary. Return ONLY the transcription text verbatim."
+            )
 
         # Step 1: Preprocess and detect silence
         audio_data, duration_sec, rms = self._prepare_audio(wav_path_or_bytes)
@@ -188,21 +232,6 @@ class GeminiSTTProvider(BaseSTTProvider):
                 language=lang_code,
                 error_reason="GEMINI_API_KEY_NOT_CONFIGURED",
                 start_time=start_time,
-            )
-
-        # Step 3: Build domain biasing and transcription instruction
-        domain_bias = get_stt_biasing_prompt(lang_code)
-        if lang_code == "om":
-            instruction = (
-                f"Transcribe this speech accurately in {lang_name} (using Latin Qubee script). "
-                f"Agricultural vocabulary context: {domain_bias}. "
-                "Do NOT translate into English or add commentary. Return only the transcription verbatim."
-            )
-        else:
-            instruction = (
-                f"Transcribe this speech accurately in authentic {lang_name} (Ethiopic Fidel script). "
-                f"Agricultural vocabulary context: {domain_bias}. "
-                "Do NOT translate into English or add commentary. Return only the transcription verbatim."
             )
 
         # Step 4: Execute Gemini STT call with bounded retries and exponential backoff
@@ -297,9 +326,10 @@ class GeminiSTTProvider(BaseSTTProvider):
                     contents=[prompt, audio_part],
                 )
 
+            stt_timeout = min(3.5, float(getattr(settings, "GEMINI_TIMEOUT_SECONDS", 3.5)))
             response = await asyncio.wait_for(
                 loop.run_in_executor(None, _sync_generate),
-                timeout=getattr(settings, "GEMINI_TIMEOUT_SECONDS", 12.0),
+                timeout=stt_timeout,
             )
 
             # Parse response parts

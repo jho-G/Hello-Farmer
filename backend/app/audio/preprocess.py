@@ -104,10 +104,9 @@ def preprocess_speech_for_stt(
         samples = scipy.signal.resample(samples, target_len).astype(np.float32)
         sr = 16000
 
-    # 3. Apply Acoustic Enhancements: AGC & Pre-emphasis
+    # 3. Apply Acoustic Normalization: Gentle AGC (preserving full harmonic spectrum)
     if apply_filter:
         samples = apply_automatic_gain_control(samples, target_rms=0.08)
-        samples = apply_preemphasis(samples, alpha=0.96)
         samples = np.clip(samples, -1.0, 1.0)
 
     # 4. Pack into 16 kHz 16-bit mono WAV container

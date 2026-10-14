@@ -37,6 +37,37 @@ class AudioSocketConnection:
         self.writer = writer
         self.call_uuid: str | None = None
         self.is_active = True
+        self._keepalive_task: asyncio.Task | None = None
+        self._keepalive_stop: asyncio.Event | None = None
+
+    def start_keepalive(self):
+        """Start streaming 20ms silence frames to Asterisk to keep app_audiosocket RTP channel alive while backend processes LLM/RAG."""
+        if self._keepalive_task and not self._keepalive_task.done():
+            return
+        self._keepalive_stop = asyncio.Event()
+        self._keepalive_task = asyncio.create_task(self._keepalive_worker())
+
+    async def _keepalive_worker(self):
+        silence_frame = b"\x00" * 320
+        header = struct.pack("!BH", TYPE_AUDIO, 320)
+        packet = header + silence_frame
+        while self._keepalive_stop and not self._keepalive_stop.is_set() and self.is_active:
+            try:
+                if self.writer.is_closing():
+                    break
+                self.writer.write(packet)
+                await self.writer.drain()
+                await asyncio.sleep(0.02)
+            except Exception:
+                break
+
+    def stop_keepalive(self):
+        """Stop keepalive silence streaming."""
+        if self._keepalive_stop:
+            self._keepalive_stop.set()
+        if self._keepalive_task:
+            self._keepalive_task.cancel()
+            self._keepalive_task = None
 
     async def initialize(self):
         """Read initial AudioSocket handshake from Asterisk (Type 0x01 + 16 bytes UUID)."""
@@ -62,14 +93,9 @@ class AudioSocketConnection:
             self.is_active = False
 
     async def drain_audio_buffer(self):
-        """Thoroughly drain buffered frames accumulated in TCP socket during outgoing playback."""
+        """Thoroughly drain buffered frames accumulated in TCP socket during outgoing playback while preserving frame protocol boundary."""
         drained_count = 0
         try:
-            # 1. Clear internal StreamReader buffer
-            if hasattr(self.reader, "_buffer") and self.reader._buffer:
-                self.reader._buffer.clear()
-
-            # 2. Non-blocking drain of any packets already received by kernel socket
             while self.is_active:
                 try:
                     header = await asyncio.wait_for(self.reader.readexactly(3), timeout=0.015)
@@ -104,29 +130,94 @@ class AudioSocketConnection:
             self.is_active = False
             return None
 
-    async def send_audio(self, pcm_data: bytes, pace: bool = True):
-        """Send 8 kHz signed linear mono PCM audio chunk to Asterisk with real-time clock pacing."""
+    async def send_audio(
+        self,
+        pcm_data: bytes,
+        pace: bool = True,
+        allow_barge_in: bool = False,
+        barge_in_threshold: int | None = None,
+    ) -> bool:
+        """Send 8 kHz signed linear mono PCM audio chunk to Asterisk with optional barge-in detection.
+
+        Args:
+            pcm_data: Raw 8 kHz 16-bit signed linear mono PCM bytes.
+            pace: Whether to clock pace outgoing frames (20ms intervals).
+            allow_barge_in: Whether caller speech can interrupt this playback.
+            barge_in_threshold: RMS energy threshold to trigger barge-in (defaults to settings).
+
+        Returns:
+            True if playback finished completely, False if interrupted by barge-in or error.
+        """
+        self.stop_keepalive()
         if not self.is_active or self.writer.is_closing():
-            return
+            return False
+
         try:
-            # Chunk into standard telephony frame (320 bytes = 20ms of 8kHz 16-bit linear PCM)
-            chunk_size = 320
+            import audioop
+        except ImportError:
+            audioop = None
+
+        try:
+            from app.config import settings
+        except ImportError:
+            from backend.app.config import settings
+
+        threshold = barge_in_threshold or getattr(settings, "BARGE_IN_ENERGY_THRESHOLD", 550)
+        is_barge_in_active = allow_barge_in and getattr(settings, "BARGE_IN_ENABLED", False) and audioop is not None
+
+        chunk_size = 320
+        consecutive_speech_frames = 0
+        self.barge_in_buffer = []
+
+        try:
             for i in range(0, len(pcm_data), chunk_size):
                 if not self.is_active or self.writer.is_closing():
-                    break
+                    return False
+
+                # Full-duplex barge-in detection: inspect incoming frames while speaking
+                if is_barge_in_active:
+                    while True:
+                        try:
+                            header = await asyncio.wait_for(self.reader.readexactly(3), timeout=0.001)
+                            msg_type, length = struct.unpack("!BH", header)
+                            payload = await self.reader.readexactly(length) if length > 0 else b""
+                            if msg_type in (TYPE_AUDIO, 0x10, 0x11, 0x12) and len(payload) >= 4:
+                                rms = audioop.rms(payload, 2)
+                                if rms >= threshold:
+                                    consecutive_speech_frames += 1
+                                    self.barge_in_buffer.append(payload)
+                                    if consecutive_speech_frames >= 2:
+                                        print(
+                                            f"🛑 [BARGE-IN DETECTED ✋] Caller spoke during playback (RMS {rms} >= {threshold})! Halting audio.",
+                                            flush=True,
+                                        )
+                                        return False
+                                else:
+                                    consecutive_speech_frames = 0
+                            elif msg_type == TYPE_HANGUP:
+                                self.is_active = False
+                                return False
+                        except asyncio.TimeoutError:
+                            break
+                        except Exception:
+                            break
+
                 chunk = pcm_data[i:i + chunk_size]
                 header = struct.pack("!BH", TYPE_AUDIO, len(chunk))
                 self.writer.write(header + chunk)
                 await self.writer.drain()
                 if pace:
-                    # 19ms sleep ensures steady 20ms frame delivery matching Asterisk clock
                     await asyncio.sleep(0.019)
+
+            return True
         except Exception as e:
             logger.error(f"Error sending audio frame to Asterisk: {e}")
             self.is_active = False
+            return False
 
     async def hangup(self):
         """Send clean hangup signal to Asterisk."""
+        self.stop_keepalive()
         if self.writer.is_closing():
             return
         try:
