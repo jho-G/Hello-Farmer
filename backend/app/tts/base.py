@@ -14,9 +14,9 @@ class BaseTTSProvider(ABC):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def get_cache_path(self, text: str, voice: str, language: str) -> Path:
-        """Calculate SHA-256 cache file path for (language, voice, text)."""
-        key = f"{language}:{voice}:{text}".encode()
+    def get_cache_path(self, text: str, voice: str, language: str, rate: str | None = None) -> Path:
+        """Calculate SHA-256 cache file path for (language, voice, text, rate)."""
+        key = f"{language}:{voice}:{rate or 'default'}:{text}".encode()
         digest = hashlib.sha256(key).hexdigest()
         return self.cache_dir / f"{digest}.pcm"
 
@@ -27,16 +27,21 @@ class BaseTTSProvider(ABC):
         return [c.strip() for c in chunks if c.strip()]
 
     @abstractmethod
-    async def _synthesize_raw(self, text: str, voice: str | None = None, language: str = "am") -> bytes:
+    async def _synthesize_raw(
+        self, text: str, voice: str | None = None, language: str = "am", rate: str | None = None
+    ) -> bytes:
         """Synthesize raw audio bytes from provider (to be downsampled if needed)."""
 
-    async def synthesize(self, text: str, voice: str | None = None, language: str = "am") -> bytes:
+    async def synthesize(
+        self, text: str, voice: str | None = None, language: str = "am", rate: str | None = None
+    ) -> bytes:
         """Synthesize text into cached 8 kHz 16-bit mono linear PCM audio.
 
         Args:
             text: Text to synthesize.
             voice: Voice name or model identifier.
             language: Target ISO language code ('am' or 'om').
+            rate: Speech rate adjustment (e.g. '-12%', '-15%').
 
         Returns:
             8 kHz 16-bit signed linear mono PCM bytes ready for telephony streaming.
@@ -45,14 +50,14 @@ class BaseTTSProvider(ABC):
             return b""
 
         actual_voice = voice or ("am-ET-MekdesNeural" if language == "am" else "default")
-        cache_path = self.get_cache_path(text.strip(), actual_voice, language)
+        cache_path = self.get_cache_path(text.strip(), actual_voice, language, rate)
 
         # Return cached audio if present
         if cache_path.exists():
             return cache_path.read_bytes()
 
         # Generate audio via provider implementation
-        raw_pcm_8k = await self._synthesize_raw(text.strip(), actual_voice, language)
+        raw_pcm_8k = await self._synthesize_raw(text.strip(), actual_voice, language, rate=rate)
 
         # Write to cache
         if raw_pcm_8k:
