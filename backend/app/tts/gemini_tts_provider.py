@@ -91,10 +91,21 @@ class GeminiTTSProvider(BaseTTSProvider):
         # Normalize numerals and abbreviations into spoken words
         clean_text = normalize_text_for_tts(text, language=language)
         valid_voices = {"Puck", "Charon", "Kore", "Fenrir", "Aoede"}
-        selected_voice = voice if (voice and voice in valid_voices) else self.voice_name
+        
+        # Pick configured voice for language if available
+        lang_configured_voice = getattr(settings, "VOICE_AFAAN_OROMO_ID", "Kore") if language == "om" else getattr(settings, "VOICE_AMHARIC_ID", "Kore")
+        default_voice = lang_configured_voice if lang_configured_voice in valid_voices else self.voice_name
+        selected_voice = voice if (voice and voice in valid_voices) else default_voice
+        if selected_voice not in valid_voices:
+            selected_voice = "Kore"
 
         if not self._is_configured or not self._genai_client:
             logger.warning("Gemini TTS is not configured. Delegating to fallback TTS provider.")
+            fallback = self._get_fallback_provider()
+            return await fallback._synthesize_raw(clean_text, voice=None, language=language)
+
+        # Skip directly to fallback if Gemini TTS daily quota is temporarily exhausted
+        if getattr(self, "_quota_exhausted_until", 0) > time.monotonic():
             fallback = self._get_fallback_provider()
             return await fallback._synthesize_raw(clean_text, voice=None, language=language)
 
@@ -162,6 +173,8 @@ class GeminiTTSProvider(BaseTTSProvider):
             err_str = str(err)
             err_lower = err_str.lower()
             is_quota = "429" in err_str or "quota" in err_lower or "resource_exhausted" in err_lower
+            if is_quota:
+                self._quota_exhausted_until = time.monotonic() + 1800.0
 
             logger.warning(
                 "Gemini TTS synthesis failed (%s): %s. Delegating to fallback TTS provider.",
