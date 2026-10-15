@@ -4,14 +4,22 @@ import logging
 from typing import Any
 
 import httpx
-from backend.app.config import settings
-from backend.app.llm.base import BaseLLMProvider, LLMAnswer
-from backend.app.llm.prompts import (
-    build_system_prompt,
-    format_user_prompt,
-)
+try:
+    from app.config import settings
+    from app.llm.base import BaseLLMProvider, LLMAnswer
+    from app.llm.prompts import (
+        build_system_prompt,
+        format_user_prompt,
+    )
+except ImportError:
+    from backend.app.config import settings
+    from backend.app.llm.base import BaseLLMProvider, LLMAnswer
+    from backend.app.llm.prompts import (
+        build_system_prompt,
+        format_user_prompt,
+    )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("hello_farmer.llm.groq")
 
 
 class GroqLLMProvider(BaseLLMProvider):
@@ -43,6 +51,8 @@ class GroqLLMProvider(BaseLLMProvider):
             weather_info=weather_info,
             language=language
         )
+        # Groq response_format requires the literal lowercase word 'json' in messages
+        user_msg = f"{user_msg}\n\nPlease respond strictly in valid json format."
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -54,19 +64,43 @@ class GroqLLMProvider(BaseLLMProvider):
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg}
             ],
+            "response_format": {"type": "json_object"},
+            "max_tokens": 800,
             "temperature": 0.2
         }
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(self.base_url, headers=headers, json=payload)
+            if resp.status_code != 200:
+                print("GROQ ERROR:", resp.status_code, resp.text, flush=True)
             resp.raise_for_status()
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
+            parsed: dict[str, Any] = {}
             if "```" in content:
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-            parsed = json.loads(content.strip())
+                parts = content.split("```")
+                for p in parts[1:]:
+                    if p.startswith("json"):
+                        p = p[4:]
+                    try:
+                        parsed = json.loads(p.strip())
+                        if isinstance(parsed, dict) and "answer" in parsed:
+                            break
+                    except Exception:
+                        continue
+            if not parsed:
+                try:
+                    parsed = json.loads(content.strip())
+                except Exception:
+                    import re
+                    match = re.search(r"\{.*\}", content, re.DOTALL)
+                    if match:
+                        try:
+                            parsed = json.loads(match.group(0))
+                        except Exception:
+                            parsed = {"answer": content.strip()}
+                    else:
+                        parsed = {"answer": content.strip()}
             return LLMAnswer(
                 answer=parsed.get("answer", "").strip(),
                 answer_en_gloss=parsed.get("answer_en_gloss", "").strip(),
@@ -74,5 +108,7 @@ class GroqLLMProvider(BaseLLMProvider):
                 sources_used=parsed.get("sources_used", []),
                 needs_referral=bool(parsed.get("needs_referral", False)),
                 topic=parsed.get("topic", "general"),
-                confidence=float(parsed.get("confidence", 0.9))
+                confidence=float(parsed.get("confidence", 0.9)),
+                provider="groq",
+                model=self.model,
             )
