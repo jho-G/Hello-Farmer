@@ -19,9 +19,8 @@ export interface LanguageOption {
 }
 
 export const LANGUAGE_OPTIONS: LanguageOption[] = [
-  { code: 'am', label: 'አማርኛ', nativeName: 'አማርኛ' },
-  { code: 'om', label: 'Afaan Oromoo', nativeName: 'Afaan Oromoo' },
   { code: 'en', label: 'English', nativeName: 'English' },
+  { code: 'am', label: 'አማርኛ', nativeName: 'አማርኛ' },
   { code: 'ti', label: 'ትግርኛ', nativeName: 'ትግርኛ' },
   { code: 'so', label: 'Af Soomaali', nativeName: 'Soomaali' },
 ];
@@ -46,6 +45,8 @@ export const translations: Record<SupportedLanguage, Record<string, string>> = {
     'nav.hotline': 'Sarara Bilbila Biyyooleessaa',
     'nav.toll_free': 'Bilbila Tolaa AI Sagalee',
     'nav.asterisk_live': 'Sararri 8028 Hojii Irra Jira',
+    'nav.coming_soon': 'Dhiyootti',
+    'nav.phase2': 'Kutaa 2ffaa (Phase 2)',
 
     // Hero Banner
     'hero.badge': 'Pilaatformii Qonnaa Biyyooleessaa Itoophiyaa AI',
@@ -232,6 +233,11 @@ export const translations: Record<SupportedLanguage, Record<string, string>> = {
     'analytics.llm_latency': 'Qindeessa Deebii (LLM)',
     'analytics.tts_latency': 'Sagaleessuu (TTS)',
     'history.view_transcript': 'Marii Ilaali',
+    'history.open_transcript': 'Marii Bani',
+    'history.close_transcript': 'Marii Cufi',
+    'history.farmer_id': 'Waraqaa Eenyummaa Qotee Bulaa',
+    'history.farmer_address': 'Teessoo Qotee Bulaa',
+    'history.advisory_summary': 'Cuunfaa Gorsa Qonnaa',
     'history.dialogue_turns': 'Marii Qotee Bulaa fi AI',
     'history.no_calls': 'Hamma ammaatti galmeen bilbilaa hin jiru.',
     'voice.engine_status': 'Haala Teeknooloojii Sagalee (Telephony Engine)',
@@ -267,6 +273,8 @@ export const translations: Record<SupportedLanguage, Record<string, string>> = {
     'nav.hotline': 'ብሔራዊ የስልክ መስመር',
     'nav.toll_free': 'ከክፍያ ነጻ የድምፅ ረዳት',
     'nav.asterisk_live': 'የ8028 መስመር ዝግጁ ነው',
+    'nav.coming_soon': 'በቅርቡ',
+    'nav.phase2': 'ምዕራፍ 2 (Phase 2)',
 
     // Hero Banner
     'hero.badge': 'የኢትዮጵያ ብሔራዊ የግብርና AI መድረክ',
@@ -453,6 +461,11 @@ export const translations: Record<SupportedLanguage, Record<string, string>> = {
     'analytics.llm_latency': 'ምላሽ ማመንጨት (LLM)',
     'analytics.tts_latency': 'ድምፅ ማዘጋጀት (TTS)',
     'history.view_transcript': 'ውይይቱን ተመልከት',
+    'history.open_transcript': 'ንግግሩን ክፈት',
+    'history.close_transcript': 'ንግግሩን ዝጋ',
+    'history.farmer_id': 'የአርሶ አደር መለያ',
+    'history.farmer_address': 'የአርሶ አደር አድራሻ',
+    'history.advisory_summary': 'የግብርና ምክር ማጠቃለያ',
     'history.dialogue_turns': 'የአርሶ አደር እና የAI ውይይት',
     'history.no_calls': 'እስካሁን የተመዘገበ ጥሪ የለም።',
     'voice.engine_status': 'የስልክ ጥሪ ሲስተም ዝግጁነት (Telephony Engine)',
@@ -488,6 +501,8 @@ export const translations: Record<SupportedLanguage, Record<string, string>> = {
     'nav.hotline': 'National Hotline',
     'nav.toll_free': 'Toll-Free Voice AI',
     'nav.asterisk_live': 'Asterisk 8028 Live',
+    'nav.coming_soon': 'Coming Soon',
+    'nav.phase2': 'Phase 2 (Roadmap)',
 
     // Hero Banner
     'hero.badge': 'Ethiopian National Agricultural AI Platform',
@@ -674,6 +689,11 @@ export const translations: Record<SupportedLanguage, Record<string, string>> = {
     'analytics.llm_latency': 'LLM Answer Generation',
     'analytics.tts_latency': 'Speech Synthesis (TTS)',
     'history.view_transcript': 'View Transcript',
+    'history.open_transcript': 'Open Transcript',
+    'history.close_transcript': 'Close Transcript',
+    'history.farmer_id': 'Farmer Specific ID',
+    'history.farmer_address': 'Farmer Location & Address',
+    'history.advisory_summary': 'Advisory Recommendation Summary',
     'history.dialogue_turns': 'Farmer & AI Dialogue Turns',
     'history.no_calls': 'No call records available yet.',
     'voice.engine_status': 'Telephony Engine & Asterisk Status',
@@ -708,6 +728,8 @@ export const translations: Record<SupportedLanguage, Record<string, string>> = {
     'nav.hotline': 'ሃገራዊ መስመር ጻውዒት',
     'nav.toll_free': 'ብነጻ ናይ ድምጺ AI',
     'nav.asterisk_live': 'መስመር 8028 ድሉው እዩ',
+    'nav.coming_soon': 'ኣብ ቀረባ',
+    'nav.phase2': 'ምዕራፍ 2 (Phase 2)',
     'hero.badge': 'ናይ ኢትዮጵያ ሃገራዊ ናይ ሕርሻ AI መድረኽ',
     'hero.title': 'እንቋዕ ናብ ሄሎ ፋርመር ብደሓን መጻእኩም!',
     'hero.subtitle': 'ምርመራ ሕማም እኽሊ፣ ክንክን ሓመድ፣ መጠንቀቕታ ዝናብን ትንበያ ፍርያትን ብትግርኛ፣ ብኣምሓርኛን ብኦሮምኛን ብስልኪ 8028 ርኸቡ።',
@@ -880,6 +902,8 @@ export const translations: Record<SupportedLanguage, Record<string, string>> = {
     'nav.hotline': 'Khadka Tooska ee Qaranka',
     'nav.toll_free': 'Bilaash AI Codka',
     'nav.asterisk_live': 'Khadka 8028 Waa Furan Yahay',
+    'nav.coming_soon': 'Dhowaan',
+    'nav.phase2': 'Wejiga 2aad (Phase 2)',
     'hero.badge': 'Madasha Qaran ee Beeraha Itoobiya AI',
     'hero.title': 'Kusoo Dhawoow Hello Farmer!',
     'hero.subtitle': 'Baaritaanka cudurrada dalagga, daryeelka carrada, digniinaha roobka iyo saadaasha wax-soo-saarka taleefanka 8028 iyo bogga internetka.',
