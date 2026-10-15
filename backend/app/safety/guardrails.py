@@ -102,6 +102,20 @@ def replace_digits_with_words(text: str, language: str = "am") -> str:
             num = int(num_str)
             if language == "om":
                 return number_to_oromo_words(num)
+            elif language == "en":
+                en_small = {
+                    0: "zero", 1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+                    6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten",
+                    11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen", 15: "fifteen",
+                    16: "sixteen", 17: "seventeen", 18: "eighteen", 19: "nineteen", 20: "twenty",
+                    30: "thirty", 40: "forty", 50: "fifty", 60: "sixty", 70: "seventy", 80: "eighty", 90: "ninety"
+                }
+                if num in en_small:
+                    return en_small[num]
+                elif 20 < num < 100:
+                    tens, rem = divmod(num, 10)
+                    return f"{en_small[tens * 10]}-{en_small[rem]}"
+                return num_str
             return number_to_amharic_words(num)
         except Exception:
             return num_str
@@ -227,12 +241,13 @@ def validate_and_guard(
             needs_referral=True,
         )
 
-    # 2b. Placeholder tier rejection for chemical dose recommendations
-    has_placeholder = any(
-        p.get("source_tier") in ("placeholder", 0, "tier_0") or p.get("is_placeholder")
+    # 2b. Placeholder tier rejection for chemical dose recommendations (only if NO higher tier sources present)
+    has_trusted_tier = any(
+        p.get("source_tier") not in ("placeholder", 0, "tier_0", None) and not p.get("is_placeholder")
         for p in retrieved_passages
     )
-    if has_placeholder and any(k in text.lower() or k in caller_question.lower() for k in CHEMICAL_DOSE_KEYWORDS):
+    only_placeholder = bool(retrieved_passages) and not has_trusted_tier
+    if only_placeholder and any(k in text.lower() or k in caller_question.lower() for k in CHEMICAL_DOSE_KEYWORDS):
         reasons.append("Source tier placeholder does not allow chemical/dosage recommendations.")
         return GuardrailResult(
             is_safe=False,
@@ -244,18 +259,24 @@ def validate_and_guard(
             needs_referral=True,
         )
 
-    # 2c. Hallucinated quantities check
+    # 2c. Hallucinated chemical dosage quantities check
+    is_chemical_query = any(k in text.lower() or k in caller_question.lower() for k in CHEMICAL_DOSE_KEYWORDS)
     answer_numbers = extract_all_numbers_from_text(text, language=language)
-    if answer_numbers and retrieved_passages:
+    if is_chemical_query and answer_numbers and retrieved_passages:
         context_text = " ".join(p.get("text", "") or p.get("content", "") for p in retrieved_passages)
         context_numbers = extract_all_numbers_from_text(context_text, language=language)
         hallucinated = answer_numbers - context_numbers
         if hallucinated:
-            reasons.append(f"Hallucinated numeric quantities not found in context: {hallucinated}")
+            reasons.append(f"Chemical dosage numbers not found in verified context: {hallucinated}")
+            dosage_safe_msg = (
+                "ለደህንነት ሲባል የፀረ-ተባይ ወይም የማዳበሪያ መጠን ከመጠቀምዎ በፊት የተለጠፈውን መመሪያ ያንብቡ እና የልማት ጣቢያ ባለሙያ ያማክሩ።"
+                if language == "am"
+                else "Nageenyaaf jecha hamma farra ilbiisaa yookiin xaa'oo fayyadamuu keessan dura qajeelfama dubbisaa ogeessa qonnaa mariisisaa."
+            )
             return GuardrailResult(
                 is_safe=False,
-                final_answer=safe_fallback,
-                final_en_gloss="Safe fallback: ungrounded quantities detected.",
+                final_answer=dosage_safe_msg,
+                final_en_gloss="Safe fallback: ungrounded chemical quantities detected.",
                 rejection_reasons=reasons,
                 applied_fallback=True,
                 grounded=False,
