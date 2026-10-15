@@ -25,7 +25,10 @@ class EdgeTTSProvider(BaseTTSProvider):
     """Edge-TTS provider with agricultural prosody and normalization enhancements."""
 
     DEFAULT_AMHARIC_VOICE = "am-ET-MekdesNeural"
-    DEFAULT_OROMO_VOICE = "am-ET-MekdesNeural"  # Fallback: edge-tts lacks native om-ET voice
+    DEFAULT_ENGLISH_VOICE = "en-US-JennyNeural"
+    DEFAULT_SOMALI_VOICE = "so-SO-UbaxNeural"
+    DEFAULT_TIGRINYA_VOICE = "am-ET-MekdesNeural"
+    DEFAULT_OROMO_VOICE = "am-ET-MekdesNeural"
 
     def __init__(self, cache_dir: str = "backend/cache/tts"):
         super().__init__(cache_dir=cache_dir)
@@ -38,7 +41,7 @@ class EdgeTTSProvider(BaseTTSProvider):
             import httpx
 
             # Google TTS supports 'am' (Amharic) and 'en'.
-            g_lang = "am" if language in ("am", "om") else "en"
+            g_lang = "am" if language in ("am", "om", "ti") else ("so" if language == "so" else "en")
 
             # Split into chunks of max 120 chars at punctuation boundaries
             parts = re.split(r'([።\n.!?])', text)
@@ -76,31 +79,42 @@ class EdgeTTSProvider(BaseTTSProvider):
             logger.error(f"Google TTS fallback error: {e}")
         return b""
 
-    async def _synthesize_raw(self, text: str, voice: str | None = None, language: str = "am") -> bytes:
+    async def _synthesize_raw(
+        self, text: str, voice: str | None = None, language: str = "am", rate: str | None = None
+    ) -> bytes:
         """Synthesize text via edge-tts with prosody tuning, falling back to Google TTS."""
-        selected_voice = (
-            voice if (voice and voice != "default")
-            else (self.DEFAULT_AMHARIC_VOICE if language == "am" else self.DEFAULT_OROMO_VOICE)
-        )
+        if voice and voice != "default":
+            selected_voice = voice
+        elif language == "en":
+            selected_voice = self.DEFAULT_ENGLISH_VOICE
+        elif language == "so":
+            selected_voice = self.DEFAULT_SOMALI_VOICE
+        else:
+            selected_voice = self.DEFAULT_AMHARIC_VOICE
 
         # 1. Phonetically normalize agricultural dosages, units, and punctuation
         norm_text = normalize_text_for_tts(text, language=language) or text
 
-        # 2. Try Edge-TTS with calibrated rural prosody (-8% rate for clarity, +15% volume)
-        try:
-            communicate = edge_tts.Communicate(norm_text, selected_voice, rate="-8%", volume="+15%")
-            mp3_buffer = io.BytesIO()
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    mp3_buffer.write(chunk["data"])
+        # 2. Calibrated rural prosody (-13% rate for clarity and composure, +15% volume)
+        speech_rate = rate or "-13%"
+        import time
+        now = time.monotonic()
+        if getattr(self, "_edge_cooldown_until", 0) <= now:
+            try:
+                communicate = edge_tts.Communicate(norm_text, selected_voice, rate=speech_rate, volume="+15%")
+                mp3_buffer = io.BytesIO()
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        mp3_buffer.write(chunk["data"])
 
-            raw_mp3_bytes = mp3_buffer.getvalue()
-            if raw_mp3_bytes:
-                pcm_8k = audio_stream_to_pcm8k(raw_mp3_bytes)
-                if pcm_8k and len(pcm_8k) > 0:
-                    return pcm_8k
-        except Exception as e:
-            logger.warning(f"Edge-TTS synthesis unavailable ({e}), trying Google TTS fallback...")
+                raw_mp3_bytes = mp3_buffer.getvalue()
+                if raw_mp3_bytes:
+                    pcm_8k = audio_stream_to_pcm8k(raw_mp3_bytes)
+                    if pcm_8k and len(pcm_8k) > 0:
+                        return pcm_8k
+            except Exception as e:
+                self._edge_cooldown_until = now + 600.0  # 10 minute cooldown
+                logger.warning(f"Edge-TTS synthesis unavailable ({e}), trying Google TTS fallback...")
 
         # Tier 2: Resilient Google Translate TTS with normalized text
         google_pcm = await self._synthesize_google(norm_text, language=language)
