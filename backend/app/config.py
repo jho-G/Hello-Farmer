@@ -1,4 +1,5 @@
 """Typed configuration management for Hello Farmer."""
+import os
 from pathlib import Path
 from typing import Any
 
@@ -21,14 +22,21 @@ class AppSettings(BaseSettings):
     OPENROUTER_MODEL: str = "nvidia/nemotron-3.5-lightning:free"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
-    STT_PROVIDER: str = "gemini"
-    TTS_PROVIDER: str = "gemini"
+    LLM_PROVIDER: str = "groq"
+    LLM_FALLBACK_PROVIDER: str = "gemini"
+    HF_TOKEN: str | None = None
+    HF_ASR_MODEL: str = "snapwre/hohe-asr-amharic"
+    GROQ_STT_MODEL: str = "whisper-large-v3"
+    STT_PROVIDER: str = "hf"
     STT_FALLBACK_PROVIDER: str = "groq"
-    LLM_FALLBACK_PROVIDER: str = "groq"
-    TTS_FALLBACK_PROVIDER: str = "edge_tts"
+    TTS_PROVIDER: str = "edge_tts"
+    TTS_FALLBACK_PROVIDER: str = "google"
 
     VOICE_LANGUAGE_DEFAULT: str = "am"
+    VOICE_AMHARIC_ID: str = "am-ET-MekdesNeural"
+    VOICE_AFAAN_OROMO_ID: str = "am-ET-MekdesNeural"
     VOICE_TTS_SPEED: float = 1.0
+    VOICE_RATE: float = 1.0
     VOICE_MAX_RESPONSE_SENTENCES: int = 4
     GEMINI_RATE_LIMIT_RPM: int = 3
     GEMINI_TIMEOUT_SECONDS: float = 12.0
@@ -38,14 +46,17 @@ class AppSettings(BaseSettings):
     WEATHER_PROVIDER: str = "open_meteo"
     SMS_PROVIDER: str = "mock"
 
-    # Telephony
+    # Telephony & VAD
     AUDIOSOCKET_HOST: str = "0.0.0.0"
     AUDIOSOCKET_PORT: int = 9092
     BARGE_IN_ENABLED: bool = False
+    BARGE_IN_ENERGY_THRESHOLD: int = 550
     MAX_CALL_DURATION_SECONDS: int = 600
-    INITIAL_SILENCE_TIMEOUT_SECONDS: int = 10
-    SPEECH_SILENCE_TIMEOUT_MS: int = 800
-    VAD_ENERGY_THRESHOLD: int = 700
+    INITIAL_SILENCE_TIMEOUT_SECONDS: int = 14
+    SPEECH_SILENCE_TIMEOUT_MS: int = 2500
+    VAD_ENERGY_THRESHOLD: int = 110
+    SILENCE_REMINDER_TIMEOUT_SEC: float = 6.0
+    MAX_SILENCE_REMINDERS: int = 2
 
     # DB & Redis
     DATABASE_URL: str = "postgresql+asyncpg://farmer:farmerpass@postgres:5432/hello_farmer"
@@ -86,4 +97,13 @@ def load_yaml_config(path: str = "config.yaml") -> dict[str, Any]:
 
 
 settings = AppSettings()
+# Enforce multilingual STT routing and calibrated silence timeout
+settings.STT_PROVIDER = "multilingual"
+settings.HF_ASR_MODEL = "snapwre/hohe-asr-amharic"
+settings.GEMINI_STT_MODEL = "gemini-3.5-flash-lite"
+if not settings.HF_TOKEN or not settings.HF_TOKEN.strip():
+    settings.HF_TOKEN = os.getenv("HF_TOKEN")
+settings.VAD_ENERGY_THRESHOLD = 150
+settings.SPEECH_SILENCE_TIMEOUT_MS = 2000
+
 yaml_config = load_yaml_config()
