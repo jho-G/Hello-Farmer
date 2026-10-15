@@ -30,12 +30,19 @@ def get_prompt_pcm(name: str, language: str = "am") -> bytes:
     filepath = PROMPTS_DIR / filename
 
     if not filepath.exists():
-        # Fallback to bilingual or amharic
+        # Fallback to Amharic version of the specific prompt
         filepath = PROMPTS_DIR / f"{name}_am.wav"
         if not filepath.exists():
-            filepath = PROMPTS_DIR / "greeting_bilingual.wav"
+            # Fallback to root prompt file without language
+            filepath = PROMPTS_DIR / f"{name}.wav"
+            if not filepath.exists():
+                # Only use greeting_bilingual if the requested prompt was actually a greeting
+                if name.startswith("greeting"):
+                    filepath = PROMPTS_DIR / "greeting_bilingual.wav"
+                else:
+                    filepath = None
 
-    if filepath.exists():
+    if filepath and filepath.exists():
         try:
             data, sr = sf.read(str(filepath), dtype="int16")
             pcm_bytes = data.tobytes()
